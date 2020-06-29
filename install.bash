@@ -8,8 +8,10 @@
 # voxel51.com
 #
 
-# Show usage information
 set -e
+cd "$(dirname "$0")"
+
+# Show usage information
 usage() {
     echo "Usage:  bash $0 [-h] [-d]
 
@@ -94,6 +96,7 @@ if [ ${DEV_INSTALL} = true ]; then
     echo "Performing dev install"
     pip install -r requirements/dev.txt
     pre-commit install
+    ./docs/setup.bash
 else
     pip install -r requirements.txt
 fi
