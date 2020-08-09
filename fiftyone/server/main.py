@@ -184,12 +184,13 @@ class StateController(Namespace):
         state.selected = list(selected)
         return state
 
-    def on_page(self, page, page_length=20):
+    def on_page(self, page, page_length=20, ids_only=False):
         """Gets the requested page of samples.
 
         Args:
             page: the page number
             page_length: the page length
+            ids_only: if true, only return sample IDs
 
         Returns:
             the list of sample dicts for the page
@@ -204,7 +205,9 @@ class StateController(Namespace):
 
         view = view.skip((page - 1) * page_length).limit(page_length + 1)
         samples = [
-            json.loads(
+            s.id
+            if ids_only
+            else json.loads(
                 json_util.dumps(s.to_mongo_dict()), parse_constant=lambda c: c
             )
             for s in view
@@ -214,7 +217,8 @@ class StateController(Namespace):
             samples = samples[:page_length]
             more = page + 1
 
-        results = [{"sample": s} for s in samples]
+        if not ids_only:
+            results = [{"sample": s} for s in samples]
         for r in results:
             w, h = get_image_size(r["sample"]["filepath"])
             r["width"] = w

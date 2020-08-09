@@ -22,6 +22,8 @@ import { ModalWrapper, Overlay } from "../components/utils";
 import routes from "../constants/routes.json";
 import * as selectors from "../recoil/selectors";
 import connect from "../utils/connect";
+import { getSocket } from "../utils/socket";
+import { useSampleNavigation } from "../utils/sampleNavigation";
 
 function NoDataset() {
   return (
@@ -37,6 +39,7 @@ function Dataset(props) {
   const hasDataset = Boolean(state && state.dataset);
   const tabs = [routes.SAMPLES, routes.TAGS, routes.LABELS, routes.SCALARS];
   const [modal, setModal] = useState({ visible: false, sample: null });
+  const modalPagination = useSampleNavigation(getSocket(port));
   const colorMapping = useRecoilValue(selectors.labelColorMapping);
 
   const handleHideModal = () => setModal({ visible: false, sample: null });
