@@ -1,3 +1,5 @@
+.. _recipes:
+
 FiftyOne Recipes
 ================
 
@@ -43,10 +45,17 @@ workflows.
     :tags: Basics,Dataset-Curation
 
 .. customcarditem::
-    :header: Add model predictions to a dataset
-    :description: Add FiftyOne to your model training and analysis loop to visualize and analyze your model's predictions.
-    :link: model_inference.html
-    :image: ../_static/images/recipes/model_inference.png
+    :header: Adding classifier predictions to a dataset
+    :description: Add FiftyOne to your model training and analysis loop to visualize and analyze your classifier's predictions.
+    :link: adding_classifications.html
+    :image: ../_static/images/recipes/adding_classifications.png
+    :tags: Basics,Model-Training
+
+.. customcarditem::
+    :header: Adding object detections to a dataset
+    :description: Use FiftyOne to store your object detections and use the FiftyOne App to analyze them.
+    :link: adding_detections.html
+    :image: ../_static/images/recipes/adding_detections.png
     :tags: Basics,Model-Training
 
 .. customcarditem::
@@ -105,12 +114,19 @@ workflows.
 
 .. End Recipe cards section ---------------------------------------------------
 
+.. note::
+
+    Check out the
+    `fiftyone-examples <https://github.com/voxel51/fiftyone-examples>`_
+    repository for more examples of using FiftyOne!
+
 .. toctree::
    :maxdepth: 1
    :hidden:
 
    Remove duplicate images<image_deduplication.ipynb>
-   Add model predictions<model_inference.ipynb>
+   Adding classifier predictions<adding_classifications.ipynb>
+   Adding object detections<adding_detections.ipynb>
    Draw labels on samples<draw_labels.ipynb>
    Convert dataset formats<convert_datasets.ipynb>
    Merge datasets<merge_datasets.ipynb>

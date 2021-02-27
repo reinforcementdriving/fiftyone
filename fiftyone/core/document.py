@@ -1,7 +1,7 @@
 """
 Base class for objects that are backed by database documents.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -30,10 +30,10 @@ class Document(object):
         try:
             return super().__getattribute__(name)
         except AttributeError:
-            if name != "_doc":
-                return self._doc.get_field(name)
-            else:
+            if name == "_doc":
                 raise
+
+        return self._doc.get_field(name)
 
     def __setattr__(self, name, value):
         if name.startswith("_") or (
@@ -78,8 +78,8 @@ class Document(object):
 
     @property
     def _id(self):
-        """The ObjectId of the document, or ``None`` if it has not been added to the
-        database.
+        """The ObjectId of the document, or ``None`` if it has not been added
+        to the database.
         """
         return self._doc.id if self._in_db else None
 
@@ -121,6 +121,28 @@ class Document(object):
         """
         return tuple()
 
+    def _get_field_names(self, include_private=False):
+        """Returns an ordered tuple of field names of this document.
+
+        Args:
+            include_private (False): whether to include private fields
+
+        Returns:
+            a tuple of field names
+        """
+        return self._doc._get_field_names(include_private=include_private)
+
+    def has_field(self, field_name):
+        """Determines whether the document has the given field.
+
+        Args:
+            field_name: the field name
+
+        Returns:
+            True/False
+        """
+        return self._doc.has_field(field_name)
+
     def get_field(self, field_name):
         """Gets the value of a field of the document.
 
@@ -133,6 +155,9 @@ class Document(object):
         Raises:
             AttributeError: if the field does not exist
         """
+        if field_name == "id":
+            return self.id
+
         return self._doc.get_field(field_name)
 
     def set_field(self, field_name, value, create=True):
@@ -174,11 +199,13 @@ class Document(object):
         Raises:
             ValueError: if the field does not exist
         """
-        self._doc.clear_field(field_name=field_name)
+        self._doc.clear_field(field_name)
 
     def iter_fields(self):
         """Returns an iterator over the ``(name, value)`` pairs of the fields
         of the document.
+
+        Private fields are omitted.
 
         Returns:
             an iterator that emits ``(name, value)`` tuples
@@ -189,20 +216,38 @@ class Document(object):
         for field_name in field_names:
             yield field_name, self.get_field(field_name)
 
-    def merge(self, document, overwrite=True):
+    def merge(
+        self,
+        document,
+        omit_fields=None,
+        omit_none_fields=True,
+        overwrite=True,
+    ):
         """Merges the fields of the document into this document.
 
         ``None``-valued fields are always omitted.
 
         Args:
             document: a :class:`Document` of the same type
+            omit_fields (None): an optional list of fields to omit
+            omit_none_fields (True): whether to omit ``None``-valued fields of
+                the provided document
             overwrite (True): whether to overwrite existing fields. Note that
                 existing fields whose values are ``None`` are always
                 overwritten
         """
+        if omit_fields is not None:
+            omit_fields = set(omit_fields)
+        else:
+            omit_fields = set()
+
         existing_field_names = self.field_names
+
         for field_name, value in document.iter_fields():
-            if value is None:
+            if field_name in omit_fields:
+                continue
+
+            if omit_none_fields and value is None:
                 continue
 
             if (
@@ -264,7 +309,8 @@ class Document(object):
 
     def reload(self):
         """Reloads the document from the database."""
-        self._doc.reload()
+        # only reload attrs that are in our schema
+        self._doc.reload(*list(self._doc))
 
     def _delete(self):
         """Deletes the document from the database."""
@@ -295,32 +341,6 @@ class Document(object):
         doc = cls._NO_COLL_CL.from_json(s)
         return cls.from_doc(doc)
 
-    @classmethod
-    def _rename_field(cls, collection_name, field_name, new_field_name):
-        """Renames any field values for in-memory document instances that
-        belong to the specified collection.
-
-        Args:
-            collection_name: the name of the MongoDB collection
-            field_name: the name of the field to rename
-            new_field_name: the new field name
-        """
-        for document in cls._instances[collection_name].values():
-            data = document._doc._data
-            data[new_field_name] = data.pop(field_name, None)
-
-    @classmethod
-    def _purge_field(cls, collection_name, field_name):
-        """Removes values for the given field from all in-memory document
-        instances that belong to the specified collection.
-
-        Args:
-            collection_name: the name of the MongoDB collection
-            field_name: the name of the field to purge
-        """
-        for document in cls._instances[collection_name].values():
-            document._doc._data.pop(field_name, None)
-
     def _set_backing_doc(self, doc, dataset=None):
         """Sets the backing doc for the document.
 
@@ -329,47 +349,138 @@ class Document(object):
             dataset (None): the :class:`fiftyone.core.dataset.Dataset` to which
                 the document belongs, if any
         """
-        # Ensure the doc is saved to the database
         if not doc.id:
             doc.save()
 
         self._doc = doc
 
-        # Save weak reference
-        dataset_instances = self._instances[doc.collection_name]
-        if self.id not in dataset_instances:
-            dataset_instances[self.id] = self
+        samples = self._instances[doc.collection_name]
+        if self.id not in samples:
+            samples[self.id] = self
 
         self._dataset = dataset
 
-    @classmethod
-    def _reset_backing_docs(cls, collection_name, doc_ids):
-        """Resets the document(s) backing documents.
+    def _reset_backing_doc(self):
+        """Resets the backing doc for the document.
 
-        Args:
-            collection_name: the name of the MongoDB collection
-            doc_ids: a list of document IDs
+        The document will no longer belong to a dataset.
         """
-        dataset_instances = cls._instances[collection_name]
-        for doc_id in doc_ids:
-            document = dataset_instances.pop(doc_id, None)
-            if document is not None:
-                document._reset_backing_doc()
+        self._doc = self.copy()._doc
+        self._dataset = None
 
     @classmethod
-    def _reset_all_backing_docs(cls, collection_name):
-        """Resets the backing documents for all documents in the collection.
+    def _rename_fields(cls, collection_name, field_names, new_field_names):
+        """Renames the field on all in-memory documents in the collection.
 
         Args:
             collection_name: the name of the MongoDB collection
+            field_names: an iterable of field names
+            new_field_names: an iterable of new field names
         """
         if collection_name not in cls._instances:
             return
 
-        dataset_instances = cls._instances.pop(collection_name)
-        for document in dataset_instances.values():
-            document._reset_backing_doc()
+        for document in cls._instances[collection_name].values():
+            data = document._doc._data
+            for field_name, new_field_name in zip(
+                field_names, new_field_names
+            ):
+                data[new_field_name] = data.pop(field_name, None)
 
-    def _reset_backing_doc(self):
-        self._doc = self.copy()._doc
-        self._dataset = None
+    @classmethod
+    def _clear_fields(cls, collection_name, field_names):
+        """Clears the values for the given field(s) (i.e., sets them to None)
+        on all in-memory documents in the collection.
+
+        Args:
+            collection_name: the name of the MongoDB collection
+            field_names: an iterable of field names
+        """
+        if collection_name not in cls._instances:
+            return
+
+        for document in cls._instances[collection_name].values():
+            for field_name in field_names:
+                document._doc._data[field_name] = None
+
+    @classmethod
+    def _purge_fields(cls, collection_name, field_names):
+        """Removes the field(s) from all in-memory documents in the collection.
+
+        Args:
+            collection_name: the name of the MongoDB collection
+            field_names: an iterable of field names
+        """
+        if collection_name not in cls._instances:
+            return
+
+        for document in cls._instances[collection_name].values():
+            for field_name in field_names:
+                document._doc._data.pop(field_name, None)
+
+    @classmethod
+    def _reload_docs(cls, collection_name, doc_ids=None):
+        """Reloads the backing documents for all in-memory documents in the
+        collection.
+
+        Documents that are still in the collection will be reloaded, and
+        documents that are no longer in the collection will be reset.
+
+        Args:
+            collection_name: the name of the MongoDB collection
+            doc_ids (None): a list of IDs of documents that are still in the
+                collection. If not provided, all documents are assumed to still
+                be in the collection
+        """
+        if collection_name not in cls._instances:
+            return
+
+        documents = cls._instances[collection_name]
+
+        # Reload all docs
+        if doc_ids is None:
+            for document in documents.values():
+                document.reload()
+
+        # Reload docs with `doc_ids`, reset others
+        if doc_ids is not None:
+            reset_ids = set()
+            for document in documents.values():
+                if document.id in doc_ids:
+                    document.reload()
+                else:
+                    reset_ids.add(document.id)
+                    document._reset_backing_doc()
+
+            for doc_id in reset_ids:
+                documents.pop(doc_id, None)
+
+    @classmethod
+    def _reset_docs(cls, collection_name, doc_ids=None):
+        """Resets the backing documents for in-memory documents in the
+        collection.
+
+        Reset documents will no longer belong to their parent dataset.
+
+        Args:
+            collection_name: the name of the MongoDB collection
+            doc_ids (None): an optional list of document IDs to reset. By
+                default, all documents are reset
+        """
+        if collection_name not in cls._instances:
+            return
+
+        # Reset all docs
+        if doc_ids is None:
+            documents = cls._instances.pop(collection_name)
+            for document in documents.values():
+                document._reset_backing_doc()
+
+        # Reset docs with `doc_ids`
+        if doc_ids is not None:
+            documents = cls._instances[collection_name]
+
+            for doc_id in doc_ids:
+                document = documents.pop(doc_id, None)
+                if document is not None:
+                    document._reset_backing_doc()

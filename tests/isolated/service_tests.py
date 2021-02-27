@@ -1,7 +1,7 @@
 """
 Service tests.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -11,6 +11,7 @@ import pickle
 import subprocess
 import sys
 import time
+import unittest
 
 import psutil
 import requests
@@ -185,6 +186,7 @@ def test_server():
         assert not p.is_running()
 
 
+@unittest.skip("Unstable, fix me")
 def test_db_interactive():
     with cleanup_subprocesses(strict=True), InteractiveSubprocess() as ip:
         ip.run_code(_start_db_snippet)
@@ -197,6 +199,7 @@ def _check_db_connectivity(interactive_subprocess):
     )
 
 
+@unittest.skip("Unstable, fix me")
 def test_db_multi_client():
     with cleanup_subprocesses(strict=True):
         ip1 = InteractiveSubprocess(autostart=True)
@@ -224,6 +227,7 @@ def test_db_multi_client():
             ip2.stop()
 
 
+@unittest.skip("Unstable, fix me")
 def test_db_multi_client_cleanup():
     with cleanup_subprocesses(strict=True):
         ip1 = InteractiveSubprocess(autostart=True)
@@ -268,6 +272,7 @@ def test_db_multi_client_cleanup():
             ip2.stop()
 
 
+@unittest.skip("Unstable, fix me")
 def test_db_cleanup():
     def _get_new_datasets(new_datasets, old_datasets):
         new_datasets = set(new_datasets) - set(old_datasets)

@@ -1,17 +1,17 @@
 """
 Definition of the `fiftyone` command-line interface (CLI).
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
 import argparse
 from collections import defaultdict
-import io
 import json
 import os
 import subprocess
 import sys
+import textwrap
 
 import argcomplete
 from tabulate import tabulate
@@ -21,12 +21,17 @@ import eta.core.utils as etau
 
 import fiftyone as fo
 import fiftyone.constants as foc
+import fiftyone.core.config as focg
 import fiftyone.core.dataset as fod
 import fiftyone.core.session as fos
 import fiftyone.core.utils as fou
+import fiftyone.migrations as fom
 import fiftyone.utils.data as foud
+import fiftyone.utils.image as foui
 import fiftyone.utils.quickstart as fouq
-import fiftyone.zoo as foz
+import fiftyone.utils.video as fouv
+import fiftyone.zoo.datasets as fozd
+import fiftyone.zoo.models as fozm
 
 
 _TABLE_FORMAT = "simple"
@@ -69,11 +74,13 @@ class FiftyOneCommand(Command):
     def setup(parser):
         subparsers = parser.add_subparsers(title="available commands")
         _register_command(subparsers, "quickstart", QuickstartCommand)
+        _register_command(subparsers, "app", AppCommand)
         _register_command(subparsers, "config", ConfigCommand)
         _register_command(subparsers, "constants", ConstantsCommand)
         _register_command(subparsers, "convert", ConvertCommand)
         _register_command(subparsers, "datasets", DatasetsCommand)
-        _register_command(subparsers, "app", AppCommand)
+        _register_command(subparsers, "migrate", MigrateCommand)
+        _register_command(subparsers, "utils", UtilsCommand)
         _register_command(subparsers, "zoo", ZooCommand)
 
     @staticmethod
@@ -94,6 +101,9 @@ class QuickstartCommand(Command):
 
         # Launch the quickstart as a remote session
         fiftyone quickstart --remote
+
+        # Launch the quickstart in a desktop App session
+        fiftyone quickstart --desktop
     """
 
     @staticmethod
@@ -108,7 +118,7 @@ class QuickstartCommand(Command):
             "-p",
             "--port",
             metavar="PORT",
-            default=5151,
+            default=None,
             type=int,
             help="the port number to use",
         )
@@ -116,17 +126,28 @@ class QuickstartCommand(Command):
             "-r",
             "--remote",
             action="store_true",
-            help="whether to launch a remote app session",
+            help="whether to launch a remote App session",
+        )
+        parser.add_argument(
+            "-a",
+            "--desktop",
+            action="store_true",
+            help="whether to launch a desktop App instance",
         )
 
     @staticmethod
     def execute(parser, args):
-        fouq.quickstart(
-            interactive=False,
+        # If desktop wasn't explicitly requested, fallback to default
+        desktop = args.desktop or None
+
+        _, session = fouq.quickstart(
             video=args.video,
             port=args.port,
             remote=args.remote,
+            desktop=desktop,
         )
+
+        _watch_session(session)
 
 
 class ConfigCommand(Command):
@@ -140,7 +161,7 @@ class ConfigCommand(Command):
         # Print a specific config field
         fiftyone config <field>
 
-        # Print the location of your config
+        # Print the location of your config on disk (if one exists)
         fiftyone config --locate
     """
 
@@ -159,13 +180,11 @@ class ConfigCommand(Command):
     @staticmethod
     def execute(parser, args):
         if args.locate:
-            if os.path.isfile(foc.FIFTYONE_CONFIG_PATH):
-                print(foc.FIFTYONE_CONFIG_PATH)
+            config_path = focg.locate_config()
+            if os.path.isfile(config_path):
+                print(config_path)
             else:
-                print(
-                    "No config file found at '%s'.\n"
-                    % foc.FIFTYONE_CONFIG_PATH
-                )
+                print("No config file found at '%s'" % config_path)
 
             return
 
@@ -305,6 +324,7 @@ class DatasetsCommand(Command):
         subparsers = parser.add_subparsers(title="available commands")
         _register_command(subparsers, "list", DatasetsListCommand)
         _register_command(subparsers, "info", DatasetsInfoCommand)
+        _register_command(subparsers, "stats", DatasetsStatsCommand)
         _register_command(subparsers, "create", DatasetsCreateCommand)
         _register_command(subparsers, "head", DatasetsHeadCommand)
         _register_command(subparsers, "tail", DatasetsTailCommand)
@@ -362,6 +382,48 @@ class DatasetsInfoCommand(Command):
     def execute(parser, args):
         dataset = fod.load_dataset(args.name)
         print(dataset)
+
+
+class DatasetsStatsCommand(Command):
+    """Print stats about FiftyOne datasets on disk.
+
+    Examples::
+
+        # Print stats about the given dataset on disk
+        fiftyone datasets stats <name>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the dataset",
+        )
+        parser.add_argument(
+            "-m",
+            "--include-media",
+            action="store_true",
+            help=(
+                "whether to include stats about the size of the raw media in "
+                "the dataset"
+            ),
+        )
+        parser.add_argument(
+            "-c",
+            "--compressed",
+            action="store_true",
+            help=(
+                "whether to return the sizes of collections in their "
+                "compressed form on disk"
+            ),
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        dataset = fod.load_dataset(args.name)
+        stats = dataset.stats(
+            include_media=args.include_media, compressed=args.compressed
+        )
+        _print_dict_as_table(stats)
 
 
 class DatasetsCreateCommand(Command):
@@ -542,26 +604,8 @@ class DatasetsStreamCommand(Command):
 
     @staticmethod
     def execute(parser, args):
-        name = args.name
-
-        dataset = fod.load_dataset(name)
-
-        # @todo support Windows and other environments without `less`
-        # Look at pydoc.pager() for inspiration?
-        p = subprocess.Popen(
-            ["less", "-F", "-R", "-S", "-X", "-K"],
-            shell=True,
-            stdin=subprocess.PIPE,
-        )
-
-        try:
-            with io.TextIOWrapper(p.stdin, errors="backslashreplace") as pipe:
-                for sample in dataset:
-                    pipe.write(str(sample) + "\n")
-
-            p.wait()
-        except (KeyboardInterrupt, OSError):
-            pass
+        dataset = fod.load_dataset(args.name)
+        fou.stream_objects(dataset)
 
 
 class DatasetsExportCommand(Command):
@@ -756,6 +800,7 @@ class AppCommand(Command):
     @staticmethod
     def setup(parser):
         subparsers = parser.add_subparsers(title="available commands")
+        _register_command(subparsers, "config", AppConfigCommand)
         _register_command(subparsers, "launch", AppLaunchCommand)
         _register_command(subparsers, "view", AppViewCommand)
         _register_command(subparsers, "connect", AppConnectCommand)
@@ -765,28 +810,88 @@ class AppCommand(Command):
         parser.print_help()
 
 
-class AppLaunchCommand(Command):
-    """Launch the FiftyOne App.
+class AppConfigCommand(Command):
+    """Tools for working with your FiftyOne App config.
 
     Examples::
 
-        # Launch the app with the given dataset
-        fiftyone app launch <name>
+        # Print your entire App config
+        fiftyone app config
 
-        # Launch a remote app session
-        fiftyone app launch <name> --remote
+        # Print a specific App config field
+        fiftyone app config <field>
+
+        # Print the location of your App config on disk (if one exists)
+        fiftyone app config --locate
     """
 
     @staticmethod
     def setup(parser):
         parser.add_argument(
-            "name", metavar="NAME", help="the name of the dataset to open",
+            "field",
+            nargs="?",
+            metavar="FIELD",
+            help="an App config field to print",
+        )
+        parser.add_argument(
+            "-l",
+            "--locate",
+            action="store_true",
+            help="print the location of your App config on disk",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        if args.locate:
+            app_config_path = focg.locate_app_config()
+            if os.path.isfile(app_config_path):
+                print(app_config_path)
+            else:
+                print("No App config file found at '%s'" % app_config_path)
+
+            return
+
+        if args.field:
+            field = getattr(fo.app_config, args.field)
+            if etau.is_str(field):
+                print(field)
+            else:
+                print(etas.json_to_str(field))
+        else:
+            print(fo.app_config)
+
+
+class AppLaunchCommand(Command):
+    """Launch the FiftyOne App.
+
+    Examples::
+
+        # Launch the App
+        fiftyone app launch
+
+        # Launch the App with the given dataset loaded
+        fiftyone app launch <name>
+
+        # Launch a remote App session
+        fiftyone app launch ... --remote
+
+        # Launch a desktop App session
+        fiftyone app launch ... --desktop
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name",
+            metavar="NAME",
+            nargs="?",
+            help="the name of a dataset to open",
         )
         parser.add_argument(
             "-p",
             "--port",
             metavar="PORT",
-            default=5151,
+            default=None,
             type=int,
             help="the port number to use",
         )
@@ -794,25 +899,46 @@ class AppLaunchCommand(Command):
             "-r",
             "--remote",
             action="store_true",
-            help="whether to launch a remote app session",
+            help="whether to launch a remote App session",
+        )
+        parser.add_argument(
+            "-a",
+            "--desktop",
+            action="store_true",
+            help="whether to launch a desktop App instance",
         )
 
     @staticmethod
     def execute(parser, args):
-        dataset = fod.load_dataset(args.name)
+        # If desktop wasn't explicitly requested, fallback to default
+        desktop = args.desktop or None
+
+        if args.name:
+            dataset = fod.load_dataset(args.name)
+        else:
+            dataset = None
+
         session = fos.launch_app(
-            dataset=dataset, port=args.port, remote=args.remote
+            dataset=dataset,
+            port=args.port,
+            remote=args.remote,
+            desktop=desktop,
         )
 
-        _watch_session(session, remote=args.remote)
+        _watch_session(session)
 
 
-def _watch_session(session, remote=False):
+def _watch_session(session):
+    # Automated tests may set `FIFTYONE_EXIT` so they can immediately exit
+    if os.environ.get("FIFTYONE_EXIT", False):
+        return
+
     try:
-        if remote:
-            print("\nTo exit, press ctrl + c\n")
+        if session.desktop:
+            print("\nTo exit, close the App or press ctrl + c\n")
         else:
-            print("\nTo exit, close the app or press ctrl + c\n")
+            print("\nTo exit, press ctrl + c\n")
+
         session.wait()
     except KeyboardInterrupt:
         pass
@@ -823,32 +949,35 @@ class AppViewCommand(Command):
 
     Examples::
 
-        # View a dataset stored on disk in the app
+        # View a dataset stored on disk in the App
         fiftyone app view --dataset-dir <dataset-dir> --type <type>
 
-        # View a zoo dataset in the app
+        # View a zoo dataset in the App
         fiftyone app view --zoo-dataset <name> --splits <split1> ...
 
-        # View a directory of images in the app
+        # View a directory of images in the App
         fiftyone app view --images-dir <images-dir>
 
-        # View a glob pattern of images in the app
+        # View a glob pattern of images in the App
         fiftyone app view --images-patt <images-patt>
 
-        # View a directory of videos in the app
+        # View a directory of videos in the App
         fiftyone app view --videos-dir <videos-dir>
 
-        # View a glob pattern of videos in the app
+        # View a glob pattern of videos in the App
         fiftyone app view --videos-patt <videos-patt>
 
-        # View a dataset stored in JSON format on disk in the app
+        # View a dataset stored in JSON format on disk in the App
         fiftyone app view --json-path <json-path>
 
-        # View a random subset of the data stored on disk in the app
+        # View a random subset of the data stored on disk in the App
         fiftyone app view ... --shuffle --max-samples <max-samples>
 
-        # View the dataset in a remote app session
+        # View the dataset in a remote App session
         fiftyone app view ... --remote
+
+        # View the dataset using the desktop App
+        fiftyone app view ... --desktop
     """
 
     @staticmethod
@@ -934,7 +1063,7 @@ class AppViewCommand(Command):
             "-p",
             "--port",
             metavar="PORT",
-            default=5151,
+            default=None,
             type=int,
             help="the port number to use",
         )
@@ -942,7 +1071,13 @@ class AppViewCommand(Command):
             "-r",
             "--remote",
             action="store_true",
-            help="whether to launch a remote app session",
+            help="whether to launch a remote App session",
+        )
+        parser.add_argument(
+            "-a",
+            "--desktop",
+            action="store_true",
+            help="whether to launch a desktop App instance",
         )
 
     @staticmethod
@@ -954,7 +1089,7 @@ class AppViewCommand(Command):
             dataset_dir = args.dataset_dir
             kwargs = _parse_dataset_import_kwargs(args)
 
-            dataset = foz.load_zoo_dataset(
+            dataset = fozd.load_zoo_dataset(
                 name, splits=splits, dataset_dir=dataset_dir, **kwargs
             )
         elif args.dataset_dir:
@@ -998,11 +1133,17 @@ class AppViewCommand(Command):
                 "provided"
             )
 
+        # If desktop wasn't explicitly requested, fallback to default
+        desktop = args.desktop or None
+
         session = fos.launch_app(
-            dataset=dataset, port=args.port, remote=args.remote
+            dataset=dataset,
+            port=args.port,
+            remote=args.remote,
+            desktop=desktop,
         )
 
-        _watch_session(session, remote=args.remote)
+        _watch_session(session)
 
 
 class AppConnectCommand(Command):
@@ -1010,11 +1151,20 @@ class AppConnectCommand(Command):
 
     Examples::
 
-        # Connect to a remote app with port forwarding already configured
+        # Connect to a remote App with port forwarding already configured
         fiftyone app connect
 
-        # Connect to a remote app session
+        # Connect to a remote App session
         fiftyone app connect --destination <destination> --port <port>
+
+        # Connect to a remote App session using an ssh key
+        fiftyone app connect ... --ssh-key <path/to/key>
+
+        # Connect to a remote App using a custom local port
+        fiftyone app connect ... --local-port <port>
+
+        # Connect to a remote session using the desktop App
+        fiftyone app connect ... --desktop
     """
 
     @staticmethod
@@ -1030,13 +1180,38 @@ class AppConnectCommand(Command):
             "-p",
             "--port",
             metavar="PORT",
-            default=5151,
+            default=None,
             type=int,
             help="the remote port to connect to",
+        )
+        parser.add_argument(
+            "-l",
+            "--local-port",
+            metavar="PORT",
+            default=None,
+            type=int,
+            help="the local port to use to serve the App",
+        )
+        parser.add_argument(
+            "-i",
+            "--ssh-key",
+            metavar="KEY",
+            default=None,
+            type=str,
+            help="optional ssh key to use to login",
+        )
+        parser.add_argument(
+            "-a",
+            "--desktop",
+            action="store_true",
+            help="whether to launch a desktop App instance",
         )
 
     @staticmethod
     def execute(parser, args):
+        remote_port = args.port or fo.config.default_app_port
+        local_port = args.local_port or fo.config.default_app_port
+
         if args.destination:
             if sys.platform.startswith("win"):
                 raise RuntimeError(
@@ -1048,20 +1223,24 @@ class AppConnectCommand(Command):
             )
             etau.ensure_basedir(control_path)
 
+            ssh_call = [
+                "ssh",
+                "-f",
+                "-N",
+                "-M",
+                "-S",
+                control_path,
+                "-L",
+                "%d:127.0.0.1:%d" % (local_port, remote_port),
+            ]
+
+            if args.ssh_key:
+                ssh_call += ["-i", args.ssh_key]
+
+            ssh_call.append(args.destination)
+
             # Port forwarding
-            ret = subprocess.call(
-                [
-                    "ssh",
-                    "-f",
-                    "-N",
-                    "-M",
-                    "-S",
-                    control_path,
-                    "-L",
-                    "5151:127.0.0.1:%d" % args.port,
-                    args.destination,
-                ]
-            )
+            ret = subprocess.call(ssh_call)
             if ret != 0:
                 print("ssh failed with exit code %r" % ret)
                 return
@@ -1082,43 +1261,93 @@ class AppConnectCommand(Command):
 
             fou.call_on_exit(stop_port_forward)
 
-        session = fos.launch_app()
+        # If desktop wasn't explicitly requested, fallback to default
+        desktop = args.desktop or None
+
+        session = fos.launch_app(port=local_port, desktop=desktop)
 
         _watch_session(session)
 
 
 class ZooCommand(Command):
-    """Tools for working with the FiftyOne Dataset Zoo."""
+    """Tools for working with the FiftyOne Zoo."""
 
     @staticmethod
     def setup(parser):
         subparsers = parser.add_subparsers(title="available commands")
-        _register_command(subparsers, "list", ZooListCommand)
-        _register_command(subparsers, "find", ZooFindCommand)
-        _register_command(subparsers, "info", ZooInfoCommand)
-        _register_command(subparsers, "download", ZooDownloadCommand)
-        _register_command(subparsers, "load", ZooLoadCommand)
+        _register_command(subparsers, "datasets", DatasetZooCommand)
+        _register_command(subparsers, "models", ModelZooCommand)
 
     @staticmethod
     def execute(parser, args):
         parser.print_help()
 
 
-class ZooListCommand(Command):
+class DatasetZooCommand(Command):
+    """Tools for working with the FiftyOne Dataset Zoo."""
+
+    @staticmethod
+    def setup(parser):
+        subparsers = parser.add_subparsers(title="available commands")
+        _register_command(subparsers, "list", DatasetZooListCommand)
+        _register_command(subparsers, "find", DatasetZooFindCommand)
+        _register_command(subparsers, "info", DatasetZooInfoCommand)
+        _register_command(subparsers, "download", DatasetZooDownloadCommand)
+        _register_command(subparsers, "load", DatasetZooLoadCommand)
+        _register_command(subparsers, "delete", DatasetZooDeleteCommand)
+
+    @staticmethod
+    def execute(parser, args):
+        parser.print_help()
+
+
+class DatasetZooListCommand(Command):
     """List datasets in the FiftyOne Dataset Zoo.
 
     Examples::
 
         # List available datasets
-        fiftyone zoo list
+        fiftyone zoo datasets list
 
-        # List available datasets, using the specified base directory to search
-        # for downloaded datasets
-        fiftyone zoo list --base-dir <base-dir>
+        # List available datasets (names only)
+        fiftyone zoo datasets list --names-only
+
+        # List downloaded datasets
+        fiftyone zoo datasets list --downloaded-only
+
+        # List available datasets from the given source
+        fiftyone zoo datasets list --source <source>
+
+        # List available datasets with the given tag
+        fiftyone zoo datasets list --tags <tag>
     """
 
     @staticmethod
     def setup(parser):
+        parser.add_argument(
+            "-n",
+            "--names-only",
+            action="store_true",
+            help="only show dataset names",
+        )
+        parser.add_argument(
+            "-d",
+            "--downloaded-only",
+            action="store_true",
+            help="only show datasets that have been downloaded",
+        )
+        parser.add_argument(
+            "-s",
+            "--source",
+            metavar="SOURCE",
+            help="only show datasets available from the specified source",
+        )
+        parser.add_argument(
+            "-t",
+            "--tags",
+            metavar="TAGS",
+            help="only show datasets with the specified tag or list,of,tags",
+        )
         parser.add_argument(
             "-b",
             "--base-dir",
@@ -1131,22 +1360,44 @@ class ZooListCommand(Command):
 
     @staticmethod
     def execute(parser, args):
-        all_datasets = foz._get_zoo_datasets()
-        all_sources, has_default = foz._get_zoo_dataset_sources()
+        names_only = args.names_only
+        downloaded_only = args.downloaded_only
+        match_source = args.source
+        match_tags = args.tags
+
+        all_datasets = fozd._get_zoo_datasets()
+        all_sources, default_source = fozd._get_zoo_dataset_sources()
 
         base_dir = args.base_dir
-        downloaded_datasets = foz.list_downloaded_zoo_datasets(
+        downloaded_datasets = fozd.list_downloaded_zoo_datasets(
             base_dir=base_dir
         )
 
         _print_zoo_dataset_list(
-            downloaded_datasets, all_datasets, all_sources, has_default
+            downloaded_datasets,
+            all_datasets,
+            all_sources,
+            default_source,
+            downloaded_only=downloaded_only,
+            match_tags=match_tags,
+            match_source=match_source,
+            names_only=names_only,
         )
 
 
 def _print_zoo_dataset_list(
-    downloaded_datasets, all_datasets, all_sources, has_default
+    downloaded_datasets,
+    all_datasets,
+    all_sources,
+    default_source,
+    downloaded_only=False,
+    match_tags=None,
+    match_source=None,
+    names_only=False,
 ):
+    if match_tags is not None:
+        match_tags = match_tags.split(",")
+
     available_datasets = defaultdict(dict)
     for source, datasets in all_datasets.items():
         for name, zoo_dataset_cls in datasets.items():
@@ -1156,13 +1407,33 @@ def _print_zoo_dataset_list(
 
     # Iterate over available datasets
     for name in sorted(available_datasets):
+        if downloaded_only and name not in downloaded_datasets:
+            continue
+
         dataset_sources = available_datasets[name]
+
+        if match_source is not None and match_source not in dataset_sources:
+            continue
+
+        tags = None
+        for source, zoo_model in dataset_sources.items():
+            if tags is None or source == default_source:
+                tags = zoo_model.tags
+
+        if (match_tags is not None) and (
+            tags is None or not all(tag in tags for tag in match_tags)
+        ):
+            continue
 
         # Check for downloaded splits
         if name in downloaded_datasets:
             dataset_dir, info = downloaded_datasets[name]
         else:
             dataset_dir, info = None, None
+
+        if names_only:
+            records.append(name)
+            continue
 
         # Get available splits across all sources
         splits = set()
@@ -1197,32 +1468,43 @@ def _print_zoo_dataset_list(
             else:
                 split_dir = ""
 
+            if downloaded_only and not split_dir:
+                continue
+
+            tags_str = ",".join(tags) if tags else ""
             is_downloaded = "\u2713" if split_dir else ""
 
             records.append(
-                (name, split, is_downloaded, split_dir) + tuple(srcs)
+                (name, tags_str, split, is_downloaded, split_dir) + tuple(srcs)
             )
 
-    first_suffix = " (*)" if has_default else ""
-    headers = (
-        ["name", "split", "downloaded", "dataset_dir"]
-        + ["%s%s" % (all_sources[0], first_suffix)]
-        + all_sources[1:]
-    )
+    if names_only:
+        for name in records:
+            print(name)
+
+        return
+
+    headers = ["name", "tags", "split", "downloaded", "dataset_dir"]
+    for source in all_sources:
+        if source == default_source:
+            source += " (*)"
+
+        headers.append(source)
+
     table_str = tabulate(records, headers=headers, tablefmt=_TABLE_FORMAT)
     print(table_str)
 
 
-class ZooFindCommand(Command):
+class DatasetZooFindCommand(Command):
     """Locate the downloaded zoo dataset on disk.
 
     Examples::
 
         # Print the location of the downloaded zoo dataset on disk
-        fiftyone zoo find <name>
+        fiftyone zoo datasets find <name>
 
         # Print the location of a specific split of the dataset
-        fiftyone zoo find <name> --split <split>
+        fiftyone zoo datasets find <name> --split <split>
     """
 
     @staticmethod
@@ -1239,21 +1521,17 @@ class ZooFindCommand(Command):
         name = args.name
         split = args.split
 
-        dataset_dir = foz.find_zoo_dataset(name, split=split)
+        dataset_dir = fozd.find_zoo_dataset(name, split=split)
         print(dataset_dir)
 
 
-class ZooInfoCommand(Command):
-    """Print information about downloaded zoo datasets.
+class DatasetZooInfoCommand(Command):
+    """Print information about datasets in the FiftyOne Dataset Zoo.
 
     Examples::
 
-        # Print information about a downloaded zoo dataset
-        fiftyone zoo info <name>
-
-        # Print information about the zoo dataset downloaded to the specified
-        # base directory
-        fiftyone zoo info <name> --base-dir <base-dir>
+        # Print information about a zoo dataset
+        fiftyone zoo datasets info <name>
     """
 
     @staticmethod
@@ -1276,14 +1554,21 @@ class ZooInfoCommand(Command):
         name = args.name
 
         # Print dataset info
-        zoo_dataset = foz.get_zoo_dataset(name)
-        print("***** Dataset description *****\n%s" % zoo_dataset.__doc__)
+        zoo_dataset = fozd.get_zoo_dataset(name)
+        print(
+            "***** Dataset description *****\n%s"
+            % textwrap.dedent("    " + zoo_dataset.__doc__)
+        )
 
         # Check if dataset is downloaded
         base_dir = args.base_dir
-        downloaded_datasets = foz.list_downloaded_zoo_datasets(
+        downloaded_datasets = fozd.list_downloaded_zoo_datasets(
             base_dir=base_dir
         )
+
+        if zoo_dataset.has_tags:
+            print("***** Tags *****")
+            print("%s\n" % ", ".join(zoo_dataset.tags))
 
         if zoo_dataset.has_splits:
             print("***** Supported splits *****")
@@ -1299,19 +1584,23 @@ class ZooInfoCommand(Command):
             print(info)
 
 
-class ZooDownloadCommand(Command):
+class DatasetZooDownloadCommand(Command):
     """Download zoo datasets.
 
     Examples::
 
         # Download the entire zoo dataset
-        fiftyone zoo download <name>
+        fiftyone zoo datasets download <name>
 
         # Download the specified split(s) of the zoo dataset
-        fiftyone zoo download <name> --splits <split1> ...
+        fiftyone zoo datasets download <name> --splits <split1> ...
 
-        # Download to the zoo dataset to a custom directory
-        fiftyone zoo download <name> --dataset-dir <dataset-dir>
+        # Download the zoo dataset to a custom directory
+        fiftyone zoo datasets download <name> --dataset-dir <dataset-dir>
+
+        # Download a zoo dataset that requires extra keyword arguments
+        fiftyone zoo datasets download <name> \\
+            --kwargs source_dir=/path/to/source/files
     """
 
     @staticmethod
@@ -1332,34 +1621,50 @@ class ZooDownloadCommand(Command):
             metavar="DATASET_DIR",
             help="a custom directory to which to download the dataset",
         )
+        parser.add_argument(
+            "-k",
+            "--kwargs",
+            nargs="+",
+            metavar="KEY=VAL",
+            action=_StoreDictAction,
+            help="optional dataset-specific keyword argument(s)",
+        )
 
     @staticmethod
     def execute(parser, args):
         name = args.name
         splits = args.splits
         dataset_dir = args.dataset_dir
-        foz.download_zoo_dataset(name, splits=splits, dataset_dir=dataset_dir)
+        kwargs = args.kwargs or {}
+
+        fozd.download_zoo_dataset(
+            name, splits=splits, dataset_dir=dataset_dir, **kwargs
+        )
 
 
-class ZooLoadCommand(Command):
+class DatasetZooLoadCommand(Command):
     """Load zoo datasets as persistent FiftyOne datasets.
 
     Examples::
 
         # Load the zoo dataset with the given name
-        fiftyone zoo load <name>
+        fiftyone zoo datasets load <name>
 
         # Load the specified split(s) of the zoo dataset
-        fiftyone zoo load <name> --splits <split1> ...
+        fiftyone zoo datasets load <name> --splits <split1> ...
 
         # Load the zoo dataset with a custom name
-        fiftyone zoo load <name> --dataset-name <dataset-name>
+        fiftyone zoo datasets load <name> --dataset-name <dataset-name>
 
         # Load the zoo dataset from a custom directory
-        fiftyone zoo load <name> --dataset-dir <dataset-dir>
+        fiftyone zoo datasets load <name> --dataset-dir <dataset-dir>
 
         # Load a random subset of the zoo dataset
-        fiftyone zoo load <name> --shuffle --max-samples <max-samples>
+        fiftyone zoo datasets load <name> --shuffle --max-samples <max-samples>
+
+        # Load a zoo dataset that requires custom keyword arguments
+        fiftyone zoo datasets load <name> \\
+            --kwargs source_dir=/path/to/source_files
     """
 
     @staticmethod
@@ -1409,6 +1714,14 @@ class ZooLoadCommand(Command):
                 "samples are imported"
             ),
         )
+        parser.add_argument(
+            "-k",
+            "--kwargs",
+            nargs="+",
+            metavar="KEY=VAL",
+            action=_StoreDictAction,
+            help="optional dataset-specific keyword argument(s)",
+        )
 
     @staticmethod
     def execute(parser, args):
@@ -1417,17 +1730,913 @@ class ZooLoadCommand(Command):
         dataset_name = args.dataset_name
         dataset_dir = args.dataset_dir
         kwargs = _parse_dataset_import_kwargs(args)
+        kwargs.update(args.kwargs or {})
 
-        dataset = foz.load_zoo_dataset(
+        dataset = fozd.load_zoo_dataset(
             name,
             splits=splits,
             dataset_name=dataset_name,
             dataset_dir=dataset_dir,
             **kwargs
         )
-
         dataset.persistent = True
-        print("Dataset '%s' created" % dataset.name)
+
+
+class DatasetZooDeleteCommand(Command):
+    """Deletes the local copy of the zoo dataset on disk.
+
+    Examples::
+
+        # Delete an entire zoo dataset from disk
+        fiftyone zoo datasets delete <name>
+
+        # Delete a specific split of a zoo dataset from disk
+        fiftyone zoo datasets delete <name> --split <split>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the dataset"
+        )
+        parser.add_argument(
+            "-s", "--split", metavar="SPLIT", help="a dataset split",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+        split = args.split
+        fozd.delete_zoo_dataset(name, split=split)
+
+
+class ModelZooCommand(Command):
+    """Tools for working with the FiftyOne Model Zoo."""
+
+    @staticmethod
+    def setup(parser):
+        subparsers = parser.add_subparsers(title="available commands")
+        _register_command(subparsers, "list", ModelZooListCommand)
+        _register_command(subparsers, "find", ModelZooFindCommand)
+        _register_command(subparsers, "info", ModelZooInfoCommand)
+        _register_command(
+            subparsers, "requirements", ModelZooRequirementsCommand
+        )
+        _register_command(subparsers, "download", ModelZooDownloadCommand)
+        _register_command(subparsers, "apply", ModelZooApplyCommand)
+        _register_command(subparsers, "embed", ModelZooEmbedCommand)
+        _register_command(subparsers, "delete", ModelZooDeleteCommand)
+
+    @staticmethod
+    def execute(parser, args):
+        parser.print_help()
+
+
+class ModelZooListCommand(Command):
+    """List datasets in the FiftyOne Model Zoo.
+
+    Examples::
+
+        # List available models
+        fiftyone zoo models list
+
+        # List available models (names only)
+        fiftyone zoo models list --names-only
+
+        # List downloaded models
+        fiftyone zoo models list --downloaded-only
+
+        # List available models with the given tag
+        fiftyone zoo models list --tags <tag>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "-n",
+            "--names-only",
+            action="store_true",
+            help="only show model names",
+        )
+        parser.add_argument(
+            "-d",
+            "--downloaded-only",
+            action="store_true",
+            help="only show models that have been downloaded",
+        )
+        parser.add_argument(
+            "-t",
+            "--tags",
+            metavar="TAGS",
+            help="only show models with the specified tag or list,of,tags",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        names_only = args.names_only
+        downloaded_only = args.downloaded_only
+        match_tags = args.tags
+
+        models_manifest = fozm._load_zoo_models_manifest()
+        downloaded_models = fozm.list_downloaded_zoo_models()
+
+        _print_zoo_models_list(
+            models_manifest,
+            downloaded_models,
+            downloaded_only=downloaded_only,
+            match_tags=match_tags,
+            names_only=names_only,
+        )
+
+
+def _print_zoo_models_list(
+    models_manifest,
+    downloaded_models,
+    downloaded_only=False,
+    match_tags=None,
+    names_only=False,
+):
+    if match_tags is not None:
+        match_tags = match_tags.split(",")
+
+    records = []
+    for model in sorted(models_manifest.models, key=lambda model: model.name):
+        name = model.name
+
+        if downloaded_only and name not in downloaded_models:
+            continue
+
+        if (match_tags is not None) and not all(
+            model.has_tag(tag) for tag in match_tags
+        ):
+            continue
+
+        if names_only:
+            records.append(name)
+            continue
+
+        if name in downloaded_models:
+            is_downloaded = "\u2713"
+            model_path = downloaded_models[name][0]
+        else:
+            is_downloaded = ""
+            model_path = ""
+
+        tags = ",".join(model.tags or [])
+
+        records.append((name, tags, is_downloaded, model_path))
+
+    if names_only:
+        for name in records:
+            print(name)
+
+        return
+
+    headers = ["name", "tags", "downloaded", "model_path"]
+    table_str = tabulate(records, headers=headers, tablefmt=_TABLE_FORMAT)
+    print(table_str)
+
+
+def _print_zoo_models_list_sample(models_manifest, downloaded_models):
+    all_models = [model.name for model in models_manifest]
+
+    records = []
+    for name in sorted(all_models):
+        if name in downloaded_models:
+            is_downloaded = "\u2713"
+            model_path = downloaded_models[name][0]
+        else:
+            is_downloaded = ""
+            model_path = ""
+
+        records.append((name, is_downloaded, model_path))
+
+    headers = ["name", "downloaded", "model_path"]
+    table_str = tabulate(records, headers=headers, tablefmt=_TABLE_FORMAT)
+    print(table_str)
+
+
+class ModelZooFindCommand(Command):
+    """Locate the downloaded zoo model on disk.
+
+    Examples::
+
+        # Print the location of the downloaded zoo model on disk
+        fiftyone zoo models find <name>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the model"
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+
+        model_path = fozm.find_zoo_model(name)
+        print(model_path)
+
+
+class ModelZooInfoCommand(Command):
+    """Print information about models in the FiftyOne Model Zoo.
+
+    Examples::
+
+        # Print information about a zoo model
+        fiftyone zoo models info <name>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the model"
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+
+        # Print model info
+        zoo_model = fozm.get_zoo_model(name)
+        print("***** Model description *****\n%s\n" % str(zoo_model))
+
+        # Check if model is downloaded
+        print("***** Model location *****")
+        if not fozm.is_zoo_model_downloaded(name):
+            print("Model '%s' is not downloaded" % name)
+        else:
+            model_path = fozm.find_zoo_model(name)
+            print(model_path)
+
+
+class ModelZooRequirementsCommand(Command):
+    """Handles package requirements for zoo models.
+
+    Examples::
+
+        # Print requirements for a zoo model
+        fiftyone zoo models requirements <name> --print
+
+        # Install any requirements for the zoo model
+        fiftyone zoo models requirements <name> --install
+
+        # Ensures that the requirements for the zoo model are satisfied
+        fiftyone zoo models requirements <name> --ensure
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the model"
+        )
+        parser.add_argument(
+            "-p",
+            "--print",
+            action="store_true",
+            help="print the requirements for the zoo model",
+        )
+        parser.add_argument(
+            "-i",
+            "--install",
+            action="store_true",
+            help="install any requirements for the zoo model",
+        )
+        parser.add_argument(
+            "-e",
+            "--ensure",
+            action="store_true",
+            help="ensure the requirements for the zoo model are satisfied",
+        )
+        parser.add_argument(
+            "--error-level",
+            metavar="LEVEL",
+            type=int,
+            help=(
+                "the error level in {0, 1, 2} to use when installing or "
+                "ensuring model requirements"
+            ),
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+        error_level = args.error_level
+
+        if args.print or (not args.install and not args.ensure):
+            zoo_model = fozm.get_zoo_model(name)
+            _print_model_requirements(zoo_model)
+
+        if args.install:
+            fozm.install_zoo_model_requirements(name, error_level=error_level)
+
+        if args.ensure:
+            fozm.ensure_zoo_model_requirements(name, error_level=error_level)
+
+
+def _print_model_requirements(zoo_model):
+    requirements = zoo_model.requirements
+    if requirements is None:
+        return
+
+    # Model requirements
+    print("***** Model requirements *****")
+    print(requirements)
+
+    # Current machine specs
+    print("\n***** Current machine *****")
+    if etau.has_gpu():
+        print("GPU: yes")
+        print("CUDA version: %s" % etau.get_cuda_version())
+        print("cuDNN version: %s" % etau.get_cudnn_version())
+    else:
+        print("GPU: no")
+
+
+class ModelZooDownloadCommand(Command):
+    """Download zoo models.
+
+    Examples::
+
+        # Download the zoo model
+        fiftyone zoo models download <name>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the zoo model"
+        )
+        parser.add_argument(
+            "-f",
+            "--force",
+            action="store_true",
+            help=(
+                "whether to force download the model if it is already "
+                "downloaded"
+            ),
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+        force = args.force
+        fozm.download_zoo_model(name, overwrite=force)
+
+
+class ModelZooApplyCommand(Command):
+    """Apply zoo models to datasets.
+
+    Examples::
+
+        # Apply the zoo model to the dataset
+        fiftyone zoo models apply <model-name> <dataset-name> <label-field>
+
+        # Apply a zoo classifier with some customized parameters
+        fiftyone zoo models apply \\
+            <model-name> <dataset-name> <label-field> \\
+            --confidence-thresh 0.7 \\
+            --store-logits \\
+            --batch-size 32
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "model_name",
+            metavar="MODEL_NAME",
+            help="the name of the zoo model",
+        )
+        parser.add_argument(
+            "dataset_name",
+            metavar="DATASET_NAME",
+            help="the name of the FiftyOne dataset to process",
+        )
+        parser.add_argument(
+            "label_field",
+            metavar="LABEL_FIELD",
+            help=(
+                "the name (or prefix) of the field in which to store the "
+                "predictions"
+            ),
+        )
+        parser.add_argument(
+            "-b",
+            "--batch-size",
+            metavar="BATCH_SIZE",
+            default=None,
+            type=int,
+            help="an optional batch size to use during inference",
+        )
+        parser.add_argument(
+            "-t",
+            "--confidence-thresh",
+            metavar="THRESH",
+            default=None,
+            type=float,
+            help=(
+                "an optional confidence threshold to apply to any applicable "
+                "labels generated by the model"
+            ),
+        )
+        parser.add_argument(
+            "-l",
+            "--store-logits",
+            action="store_true",
+            help="store logits for the predictions",
+        )
+        parser.add_argument(
+            "-i",
+            "--install",
+            action="store_true",
+            help="install any requirements for the zoo model",
+        )
+        parser.add_argument(
+            "--error-level",
+            metavar="LEVEL",
+            type=int,
+            help=(
+                "the error level in {0, 1, 2} to use when installing or "
+                "ensuring model requirements"
+            ),
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        model = fozm.load_zoo_model(
+            args.model_name,
+            install_requirements=args.install,
+            error_level=args.error_level,
+        )
+
+        dataset = fod.load_dataset(args.dataset_name)
+
+        dataset.apply_model(
+            model,
+            args.label_field,
+            confidence_thresh=args.confidence_thresh,
+            store_logits=args.store_logits,
+            batch_size=args.batch_size,
+        )
+
+
+class ModelZooEmbedCommand(Command):
+    """Generate embeddings for datasets with zoo models.
+
+    Examples::
+
+        # Generate embeddings for the dataset with the zoo model
+        fiftyone zoo models embed <model-name> <dataset-name> <embeddings-field>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "model_name",
+            metavar="MODEL_NAME",
+            help="the name of the zoo model",
+        )
+        parser.add_argument(
+            "dataset_name",
+            metavar="DATASET_NAME",
+            help="the name of the FiftyOne dataset to process",
+        )
+        parser.add_argument(
+            "embeddings_field",
+            metavar="EMBEDDINGS_FIELD",
+            help="the name of the field in which to store the embeddings",
+        )
+        parser.add_argument(
+            "-b",
+            "--batch-size",
+            metavar="BATCH_SIZE",
+            default=None,
+            type=int,
+            help="an optional batch size to use during inference",
+        )
+        parser.add_argument(
+            "-i",
+            "--install",
+            action="store_true",
+            help="install any requirements for the zoo model",
+        )
+        parser.add_argument(
+            "--error-level",
+            metavar="LEVEL",
+            type=int,
+            help=(
+                "the error level in {0, 1, 2} to use when installing or "
+                "ensuring model requirements"
+            ),
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        model = fozm.load_zoo_model(
+            args.model_name,
+            install_requirements=args.install,
+            error_level=args.error_level,
+        )
+        dataset = fod.load_dataset(args.dataset_name)
+        dataset.compute_embeddings(
+            model,
+            embeddings_field=args.embeddings_field,
+            batch_size=args.batch_size,
+        )
+
+
+class ModelZooDeleteCommand(Command):
+    """Deletes the local copy of the zoo model on disk.
+
+    Examples::
+
+        # Delete the zoo model from disk
+        fiftyone zoo models delete <name>
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="NAME", help="the name of the model"
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        name = args.name
+        fozm.delete_zoo_model(name)
+
+
+class MigrateCommand(Command):
+    """Tools for migrating the FiftyOne database.
+
+    Examples::
+
+        # Print information about the current revisions of all datasets
+        fiftyone migrate --info
+
+        # Migrates the database and all datasets to the current package version
+        fiftyone migrate --all
+
+        # Migrates to a specific revision
+        fiftyone migrate --all --version <VERSION>
+
+        # Migrates a specific dataset
+        fiftyone migrate ... --dataset-name <DATASET_NAME>
+
+        # Runs only the admin (database) migrations
+        fiftyone migrate ... --admin-only
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "-i",
+            "--info",
+            action="store_true",
+            help="whether to print info about the current revisions",
+        )
+        parser.add_argument(
+            "-a",
+            "--all",
+            action="store_true",
+            help="whether to migrate the database and all datasets",
+        )
+        parser.add_argument(
+            "-v",
+            "--version",
+            metavar="VERSION",
+            help="the revision to migrate to",
+        )
+        parser.add_argument(
+            "-n",
+            "--dataset-name",
+            nargs="+",
+            metavar="DATASET_NAME",
+            help="the name of a specific dataset to migrate",
+        )
+        parser.add_argument(
+            "--admin-only",
+            action="store_true",
+            help="whether to run only admin (database) migrations",
+        )
+        parser.add_argument(
+            "--verbose",
+            action="store_true",
+            help="whether to log incremental migrations that are performed",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        if args.info:
+            db_ver = fom.get_database_revision() or ""
+
+            if args.admin_only:
+                print(db_ver)
+                return
+
+            if args.dataset_name is not None:
+                for name in args.dataset_name:
+                    print(fom.get_dataset_revision(name))
+
+                return
+
+            dataset_vers = {
+                name: fom.get_dataset_revision(name)
+                for name in fod.list_datasets()
+            }
+
+            _print_migration_table(foc.VERSION, db_ver, dataset_vers)
+            return
+
+        if args.all:
+            fom.migrate_all(destination=args.version, verbose=args.verbose)
+            return
+
+        if args.admin_only:
+            fom.migrate_database_if_necessary(
+                destination=args.version, verbose=args.verbose
+            )
+            return
+
+        if args.dataset_name:
+            for name in args.dataset_name:
+                fom.migrate_dataset_if_necessary(
+                    name, destination=args.version, verbose=args.verbose
+                )
+
+            return
+
+        parser.print_help()
+
+
+def _print_migration_table(fo_ver, db_ver, dataset_vers):
+    print("FiftyOne package version: %s" % fo_ver)
+    print("Database version: %s" % db_ver)
+
+    if dataset_vers:
+        print("")
+        _print_dict_as_table(dataset_vers, headers=["dataset", "version"])
+
+
+class UtilsCommand(Command):
+    """FiftyOne utilities."""
+
+    @staticmethod
+    def setup(parser):
+        subparsers = parser.add_subparsers(title="available commands")
+        _register_command(
+            subparsers, "compute-metadata", ComputeMetadataCommand
+        )
+        _register_command(
+            subparsers, "transform-images", TransformImagesCommand
+        )
+        _register_command(
+            subparsers, "transform-videos", TransformVideosCommand
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        parser.print_help()
+
+
+class ComputeMetadataCommand(Command):
+    """Populates the `metadata` field of all samples in the dataset.
+
+    Examples::
+
+        # Populate all missing `metadata` sample fields
+        fiftyone utils compute-metadata <dataset-name>
+
+        # (Re)-populate the `metadata` field for all samples
+        fiftyone utils compute-metadata <dataset-name> --overwrite
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="DATASET_NAME", help="the name of the dataset"
+        )
+        parser.add_argument(
+            "-o",
+            "--overwrite",
+            action="store_true",
+            help="whether to overwrite existing metadata",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        dataset = fod.load_dataset(args.name)
+        dataset.compute_metadata(overwrite=args.overwrite)
+
+
+class TransformImagesCommand(Command):
+    """Transforms the images in a dataset per the specified parameters.
+
+    Examples::
+
+        # Convert the images in the dataset to PNGs
+        fiftyone utils transform-images <dataset-name> --ext .png --delete-originals
+
+        # Ensure that no images in the dataset exceed 1920 x 1080
+        fiftyone utils transform-images <dataset-name> --max-size 1920,1080
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="DATASET_NAME", help="the name of the dataset"
+        )
+        parser.add_argument(
+            "--size",
+            metavar="SIZE",
+            action=_StoreSizeTupleAction,
+            help=(
+                "a `width,height` for each image. A dimension can be -1 if "
+                "no constraint should be applied"
+            ),
+        )
+        parser.add_argument(
+            "--min-size",
+            metavar="MIN_SIZE",
+            action=_StoreSizeTupleAction,
+            help=(
+                "a minimum `width,height` for each image. A dimension can be "
+                "-1 if no constraint should be applied"
+            ),
+        )
+        parser.add_argument(
+            "--max-size",
+            metavar="MAX_SIZE",
+            action=_StoreSizeTupleAction,
+            help=(
+                "a maximum `width,height` for each image. A dimension can be "
+                "-1 if no constraint should be applied"
+            ),
+        )
+        parser.add_argument(
+            "-e",
+            "--ext",
+            metavar="EXT",
+            help="an image format to convert to (e.g., '.png' or '.jpg')",
+        )
+        parser.add_argument(
+            "-f",
+            "--force-reencode",
+            action="store_true",
+            help=(
+                "whether to re-encode images whose parameters already meet "
+                "the specified values"
+            ),
+        )
+        parser.add_argument(
+            "-d",
+            "--delete-originals",
+            action="store_true",
+            help="whether to delete the original images after transforming",
+        )
+        parser.add_argument(
+            "-n",
+            "--num-workers",
+            default=None,
+            type=int,
+            help=(
+                "the number of worker processes to use. The default is "
+                "`multiprocessing.cpu_count()`"
+            ),
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        dataset = fod.load_dataset(args.name)
+        foui.transform_images(
+            dataset,
+            size=args.size,
+            min_size=args.min_size,
+            max_size=args.max_size,
+            ext=args.ext,
+            force_reencode=args.force_reencode,
+            delete_originals=args.delete_originals,
+            num_workers=args.num_workers,
+        )
+
+
+class TransformVideosCommand(Command):
+    """Transforms the videos in a dataset per the specified parameters.
+
+    Examples::
+
+        # Re-encode the videos in the dataset as H.264 MP4s
+        fiftyone utils transform-videos <dataset-name> --reencode
+
+        # Ensure that no videos in the dataset exceed 1920 x 1080 and 30fps
+        fiftyone utils transform-videos <dataset-name> \\
+            --max-size 1920,1080 --max-fps 30.0
+    """
+
+    @staticmethod
+    def setup(parser):
+        parser.add_argument(
+            "name", metavar="DATASET_NAME", help="the name of the dataset"
+        )
+        parser.add_argument(
+            "--fps",
+            metavar="FPS",
+            default=None,
+            type=float,
+            help="a frame rate at which to resample the videos",
+        )
+        parser.add_argument(
+            "--min-fps",
+            metavar="MIN_FPS",
+            default=None,
+            type=float,
+            help=(
+                "a minimum frame rate. Videos with frame rate below this "
+                "value are upsampled"
+            ),
+        )
+        parser.add_argument(
+            "--max-fps",
+            metavar="MAX_FPS",
+            default=None,
+            type=float,
+            help=(
+                "a maximum frame rate. Videos with frame rate exceeding this "
+                "value are downsampled"
+            ),
+        )
+        parser.add_argument(
+            "--size",
+            metavar="SIZE",
+            action=_StoreSizeTupleAction,
+            help=(
+                "a `width,height` for each frame. A dimension can be -1 if "
+                "no constraint should be applied"
+            ),
+        )
+        parser.add_argument(
+            "--min-size",
+            metavar="MIN_SIZE",
+            action=_StoreSizeTupleAction,
+            help=(
+                "a minimum `width,height` for each frame. A dimension can be "
+                "-1 if no constraint should be applied"
+            ),
+        )
+        parser.add_argument(
+            "--max-size",
+            metavar="MAX_SIZE",
+            action=_StoreSizeTupleAction,
+            help=(
+                "a maximum `width,height` for each frame. A dimension can be "
+                "-1 if no constraint should be applied"
+            ),
+        )
+        parser.add_argument(
+            "-r",
+            "--reencode",
+            action="store_true",
+            help="whether to re-encode the videos as H.264 MP4s",
+        )
+        parser.add_argument(
+            "-f",
+            "--force-reencode",
+            action="store_true",
+            help=(
+                "whether to re-encode videos whose parameters already meet "
+                "the specified values"
+            ),
+        )
+        parser.add_argument(
+            "-d",
+            "--delete-originals",
+            action="store_true",
+            help="whether to delete the original videos after transforming",
+        )
+        parser.add_argument(
+            "-v",
+            "--verbose",
+            action="store_true",
+            help="whether to log the `ffmpeg` commands that are executed",
+        )
+
+    @staticmethod
+    def execute(parser, args):
+        dataset = fod.load_dataset(args.name)
+        fouv.transform_videos(
+            dataset,
+            fps=args.fps,
+            min_fps=args.min_fps,
+            max_fps=args.max_fps,
+            size=args.size,
+            min_size=args.min_size,
+            max_size=args.max_size,
+            reencode=args.reencode,
+            force_reencode=args.force_reencode,
+            delete_originals=args.delete_originals,
+            verbose=args.verbose,
+        )
 
 
 def _parse_dataset_import_kwargs(args):
@@ -1449,11 +2658,12 @@ def _print_dict_as_json(d):
     print(json.dumps(d, indent=4))
 
 
-def _print_dict_as_table(d):
+def _print_dict_as_table(d, headers=None):
+    if headers is None:
+        headers = ["key", "value"]
+
     records = [(k, v) for k, v in d.items()]
-    table_str = tabulate(
-        records, headers=["key", "value"], tablefmt=_TABLE_FORMAT
-    )
+    table_str = tabulate(records, headers=headers, tablefmt=_TABLE_FORMAT)
     print(table_str)
 
 
@@ -1472,6 +2682,20 @@ def _iter_subparsers(parser):
                 yield subparser
 
 
+def _parse_value(val):
+    try:
+        return int(val)
+    except ValueError:
+        pass
+
+    try:
+        return float(val)
+    except ValueError:
+        pass
+
+    return val
+
+
 class _RecursiveHelpAction(argparse._HelpAction):
     def __call__(self, parser, *args, **kwargs):
         self._recurse(parser)
@@ -1482,6 +2706,37 @@ class _RecursiveHelpAction(argparse._HelpAction):
         print("\n%s\n%s" % ("*" * 79, parser.format_help()))
         for subparser in _iter_subparsers(parser):
             _RecursiveHelpAction._recurse(subparser)
+
+
+class _StoreDictAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        kwargs = {}
+        if not isinstance(values, list):
+            values = [values]
+
+        for value in values:
+            key, val = value.split("=")
+            kwargs[key.replace("-", "_")] = _parse_value(val)
+
+        setattr(namespace, self.dest, kwargs)
+
+
+class _StoreSizeTupleAction(argparse.Action):
+    def __call__(self, parser, namespace, value, option_string=None):
+        if value is not None:
+            try:
+                l, r = value.split(",")
+                size = (int(l), int(r))
+            except:
+                raise ValueError(
+                    "Invalid argument %s for parameter '%s'; expected "
+                    "`width,height`" % (value, self.dest)
+                )
+
+        else:
+            size = None
+
+        setattr(namespace, self.dest, size)
 
 
 def _register_main_command(command, version=None, recursive_help=True):

@@ -1,11 +1,11 @@
 """
 Labels stored in dataset samples.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-from bson.objectid import ObjectId
+from bson import ObjectId
 
 import eta.core.data as etad
 import eta.core.geometry as etag
@@ -171,6 +171,17 @@ class _HasID(Label):
         return ("id",) + self._fields_ordered
 
 
+class _HasLabelList(object):
+    """Mixin for :class:`Label` classes that contain a list of :class:`Label`
+    instances.
+
+    The ``_LABEL_LIST_FIELD`` attribute must be defined to specify the name of
+    the field that contains the :class:`Label` elements.
+    """
+
+    _LABEL_LIST_FIELD = None
+
+
 class ImageLabel(Label):
     """Base class for labels associated with images."""
 
@@ -194,7 +205,7 @@ class Classification(ImageLabel, _HasID):
 
     Args:
         label (None): the label string
-        confidence (None): a confidence in ``[0, 1]`` for the label
+        confidence (None): a confidence in ``[0, 1]`` for the classification
         logits (None): logits associated with the labels
     """
 
@@ -244,13 +255,15 @@ class Classification(ImageLabel, _HasID):
         return classification
 
 
-class Classifications(ImageLabel):
+class Classifications(ImageLabel, _HasLabelList):
     """A list of classifications (typically from a multilabel model) in an
     image.
 
     Args:
         classifications (None): a list of :class:`Classification` instances
     """
+
+    _LABEL_LIST_FIELD = "classifications"
 
     meta = {"allow_inheritance": True}
 
@@ -319,7 +332,7 @@ class Detection(ImageLabel, _HasID, _HasAttributes):
         mask (None): an instance segmentation mask for the detection within
             its bounding box, which should be a 2D binary or 0/1 integer NumPy
             array
-        confidence (None): a confidence in ``[0, 1]`` for the label
+        confidence (None): a confidence in ``[0, 1]`` for the detection
         index (None): an index for the object
         attributes ({}): a dict mapping attribute names to :class:`Attribute`
             instances
@@ -328,7 +341,7 @@ class Detection(ImageLabel, _HasID, _HasAttributes):
     meta = {"allow_inheritance": True}
 
     label = fof.StringField()
-    bounding_box = fof.ListField()
+    bounding_box = fof.ListField(fof.FloatField())
     mask = fof.ArrayField()
     confidence = fof.FloatField()
     index = fof.IntField()
@@ -429,12 +442,14 @@ class Detection(ImageLabel, _HasID, _HasAttributes):
         )
 
 
-class Detections(ImageLabel):
+class Detections(ImageLabel, _HasLabelList):
     """A list of object detections in an image.
 
     Args:
         detections (None): a list of :class:`Detection` instances
     """
+
+    _LABEL_LIST_FIELD = "detections"
 
     meta = {"allow_inheritance": True}
 
@@ -507,6 +522,7 @@ class Polyline(ImageLabel, _HasID, _HasAttributes):
         points (None): a list of lists of ``(x, y)`` points in
             ``[0, 1] x [0, 1]`` describing the vertices of each shape in the
             polyline
+        confidence (None): a confidence in ``[0, 1]`` for the polyline
         index (None): an index for the polyline
         closed (False): whether the shapes are closed, i.e., and edge should
             be drawn from the last vertex to the first vertex of each shape
@@ -520,6 +536,7 @@ class Polyline(ImageLabel, _HasID, _HasAttributes):
 
     label = fof.StringField()
     points = fof.PolylinePointsField()
+    confidence = fof.FloatField()
     index = fof.IntField()
     closed = fof.BooleanField(default=False)
     filled = fof.BooleanField(default=False)
@@ -551,6 +568,7 @@ class Polyline(ImageLabel, _HasID, _HasAttributes):
         return Detection(
             label=self.label,
             bounding_box=bounding_box,
+            confidence=self.confidence,
             mask=mask,
             index=self.index,
             attributes=self.attributes,
@@ -571,6 +589,7 @@ class Polyline(ImageLabel, _HasID, _HasAttributes):
 
         return etap.Polyline(
             label=self.label,
+            confidence=self.confidence,
             index=self.index,
             name=name,
             points=self.points,
@@ -609,6 +628,7 @@ class Polyline(ImageLabel, _HasID, _HasAttributes):
         return cls(
             label=polyline.label,
             points=polyline.points,
+            confidence=polyline.confidence,
             index=polyline.index,
             closed=polyline.closed,
             filled=polyline.filled,
@@ -616,12 +636,14 @@ class Polyline(ImageLabel, _HasID, _HasAttributes):
         )
 
 
-class Polylines(ImageLabel):
+class Polylines(ImageLabel, _HasLabelList):
     """A list of polylines or polygons in an image.
 
     Args:
         polylines (None): a list of :class:`Polyline` instances
     """
+
+    _LABEL_LIST_FIELD = "polylines"
 
     meta = {"allow_inheritance": True}
 
@@ -688,6 +710,7 @@ class Keypoint(ImageLabel, _HasID, _HasAttributes):
     Args:
         label (None): a label for the points
         points (None): a list of ``(x, y)`` keypoints in ``[0, 1] x [0, 1]``
+        confidence (None): a confidence in ``[0, 1]`` for the points
         index (None): an index for the keypoints
         attributes ({}): a dict mapping attribute names to :class:`Attribute`
             instances
@@ -697,6 +720,7 @@ class Keypoint(ImageLabel, _HasID, _HasAttributes):
 
     label = fof.StringField()
     points = fof.KeypointsField()
+    confidence = fof.FloatField()
     index = fof.IntField()
 
     def to_eta_keypoints(self, name=None):
@@ -715,6 +739,7 @@ class Keypoint(ImageLabel, _HasID, _HasAttributes):
         return etak.Keypoints(
             name=name,
             label=self.label,
+            confidence=self.confidence,
             index=self.index,
             points=self.points,
             attrs=attrs,
@@ -750,17 +775,20 @@ class Keypoint(ImageLabel, _HasID, _HasAttributes):
         return cls(
             label=keypoints.label,
             points=keypoints.points,
+            confidence=keypoints.confidence,
             index=keypoints.index,
             attributes=attributes,
         )
 
 
-class Keypoints(ImageLabel):
+class Keypoints(ImageLabel, _HasLabelList):
     """A list of :class:`Keypoint` instances in an image.
 
     Args:
         keypoints (None): a list of :class:`Keypoint` instances
     """
+
+    _LABEL_LIST_FIELD = "keypoints"
 
     meta = {"allow_inheritance": True}
 
@@ -804,7 +832,7 @@ class Segmentation(ImageLabel):
     """A semantic segmentation mask for an image.
 
     Args:
-        mask (None): a semantic segmentation mask, which should be a 2D NumPy
+        mask (None): a semantic segmentation mask, which should be a NumPy
             array with integer values encoding the semantic labels
     """
 
@@ -824,22 +852,30 @@ class Segmentation(ImageLabel):
         """
         return etai.ImageLabels(mask=self.mask)
 
+    @classmethod
+    def from_mask(cls, mask):
+        """Creates a :class:`Segmentation` instance from a mask.
+
+        Args:
+            mask: a semantic segmentation mask
+
+        Returns:
+            a :class:`Segmentation`
+        """
+        return cls(mask=mask)
+
 
 class _FrameLabels(Label):
-    """Hidden label class strictly for storing labels for the first frame of
-    video samples.
+    """Private label class used for storing labels for the first frame of video
+    samples.
     """
 
     pass
 
 
-class _Frames(Label):
-    """Hidden label class strictly for storing quick access information about
-    frame labels for video samples.
-    """
-
-    frame_count = fof.IntField(required=True, null=False, default=0)
-    first_frame = fof.EmbeddedDocumentField(_FrameLabels, null=True)
+_SINGLE_LABEL_FIELDS = (Classification, Detection, Polyline, Keypoint)
+_LABEL_LIST_FIELDS = (Classifications, Detections, Polylines, Keypoints)
+_LABEL_FIELDS = _SINGLE_LABEL_FIELDS + _LABEL_LIST_FIELDS
 
 
 def _from_eta_attributes(attrs):

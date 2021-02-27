@@ -1,21 +1,22 @@
+.. _loading-datasets:
+
 Loading data into FiftyOne
 ==========================
 
 .. default-role:: code
 
 The first step to using FiftyOne is to load your data into a
-|WhatIsAFiftyOneDataset|. FiftyOne supports automatic loading of datasets stored in
-various common formats. If your dataset is stored in a custom format, don't
-worry, FiftyOne also provides support for easily loading datasets in custom
-formats.
+:ref:`dataset <using-datasets>`. FiftyOne supports automatic loading of
+datasets stored in various common formats. If your dataset is stored in a
+custom format, don't worry, FiftyOne also provides support for easily loading
+datasets in custom formats.
 
 .. note::
 
-    When you create a |WhatIsAFiftyOneDataset|, its samples and all of their
-    fields (metadata, labels, custom fields, etc.) are written to FiftyOne's
-    backing database.
+    When you create a |Dataset|, its samples and all of their fields (metadata,
+    labels, custom fields, etc.) are written to FiftyOne's backing database.
 
-    **Important!** Samples only store the `filepath` to the media, not the
+    **Important:** Samples only store the `filepath` to the media, not the
     raw media itself. FiftyOne does not create duplicate copies of your data!
 
 Loading datasets
@@ -264,7 +265,7 @@ below to figure out which option is best for you.
     .. tab:: I don't have data
 
         Check out how to automatically download and load popular public
-        datasets using the :doc:`FiftyOne Dataset Zoo <zoo>`!
+        datasets using the :ref:`FiftyOne Dataset Zoo <dataset-zoo>`!
 
         You can download any dataset in the zoo and load it into FiftyOne using
         a single command:
@@ -283,7 +284,7 @@ below to figure out which option is best for you.
 
         .. note::
 
-            :doc:`Learn more <zoo>` about the FiftyOne Dataset Zoo!
+            :ref:`Learn more <dataset-zoo>` about the FiftyOne Dataset Zoo!
 
 Advanced loading options
 ------------------------
@@ -468,6 +469,5 @@ your custom format.
    :maxdepth: 1
    :hidden:
 
-   Loading datasets <datasets>
+   Datasets from disk <datasets>
    Adding samples <samples>
-   Zoo datasets <zoo>

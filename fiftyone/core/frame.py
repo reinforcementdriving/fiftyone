@@ -1,20 +1,17 @@
 """
 Video frames.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
 from collections import defaultdict
 from copy import deepcopy
-import json
 import weakref
-import six
 
-from bson import ObjectId, json_util
 from pymongo import ReplaceOne
 
-import fiftyone as fo
+from fiftyone.core.expressions import ViewField as F
 from fiftyone.core.document import Document
 import fiftyone.core.frame_utils as fofu
 from fiftyone.core.odm.frame import (
@@ -22,6 +19,7 @@ from fiftyone.core.odm.frame import (
     DatasetFrameSampleDocument,
 )
 import fiftyone.core.utils as fou
+
 
 #
 # This class is instantiated automatically and depends on an owning
@@ -42,22 +40,45 @@ class Frames(object):
     def __init__(self):
         self._sample = None
         self._iter = None
-        self._iter_doc = None
+        self._iter_frame = None
         self._replacements = {}
 
     def __str__(self):
         return "<%s: %s>" % (self.__class__.__name__, fou.pformat(dict(self)))
 
     def __repr__(self):
-        num_frames = len(self)
-        plural = "s" if num_frames != 1 else ""
-        return "{ <%d frame%s> }" % (num_frames, plural)
+        return "<%s: %s>" % (self.__class__.__name__, len(self))
+
+    def __bool__(self):
+        return len(self) > 0
 
     def __len__(self):
-        return self._sample._doc.frames["frame_count"]
+        if not self._in_db:
+            return len(self._replacements)
 
-    def _set_replacement(self, doc):
-        self._replacements[doc.get_field("frame_number")] = doc
+        self._save_replacements()
+        return self._frame_collection.find(
+            {"_sample_id": self._sample._id}
+        ).count()
+
+    @property
+    def _view(self):
+        return getattr(self._sample, "_view", None)
+
+    def _set_replacement(self, frame):
+        self._replacements[frame.frame_number] = frame
+
+    def _set_replacements(self, frames):
+        frame_dict_to_doc = self._sample._dataset._frame_dict_to_doc
+        for d in frames:
+            if d["frame_number"] in self._replacements:
+                continue
+            frame = Frame.from_doc(
+                frame_dict_to_doc(d),
+                dataset=self._sample._dataset,
+                view=self._view,
+            )
+            self._replacements[frame.frame_number] = frame
 
     def _save_replacements(self, insert=False):
         if not self._replacements:
@@ -65,31 +86,34 @@ class Frames(object):
 
         if insert:
             self._frame_collection.insert_many(
-                [self._make_dict(doc) for doc in self._replacements.values()]
+                [
+                    self._make_dict(frame)
+                    for frame in self._replacements.values()
+                ]
             )
         else:
             self._frame_collection.bulk_write(
                 [
                     ReplaceOne(
-                        self._make_filter(frame_number, doc),
-                        self._make_dict(doc),
+                        self._make_filter(frame_number, self._sample._id),
+                        self._make_dict(frame),
                         upsert=True,
                     )
-                    for frame_number, doc in self._replacements.items()
+                    for frame_number, frame in self._replacements.items()
                 ],
                 ordered=False,
             )
+
         self._replacements = {}
 
-    def _make_filter(self, frame_number, doc):
-        doc._sample_id = self._sample._id
+    def _make_filter(self, frame_number, sample_id):
         return {
             "frame_number": frame_number,
-            "_sample_id": self._sample._id,
+            "_sample_id": sample_id,
         }
 
-    def _make_dict(self, doc):
-        d = doc.to_dict(extended=False)
+    def _make_dict(self, frame):
+        d = frame._doc.to_dict(extended=False)
         d.pop("_id", None)
         d["_sample_id"] = self._sample._id
         return d
@@ -103,15 +127,15 @@ class Frames(object):
             return next(self._iter)
         except StopIteration:
             self._iter = None
-            self._iter_doc = None
+            self._iter_frame = None
             raise
 
     def __contains__(self, frame_number):
         if frame_number in self._replacements:
             return True
 
-        if self._sample._in_db:
-            find_d = self._make_filter(frame_number, self._sample._doc)
+        if self._in_db:
+            find_d = self._make_filter(frame_number, self._sample._id)
             return self._frame_collection.find_one(find_d) is not None
 
         return False
@@ -119,8 +143,7 @@ class Frames(object):
     def __getitem__(self, frame_number):
         fofu.validate_frame_number(frame_number)
 
-        dataset = None
-        doc = None
+        frame = None
         d = None
         default_d = {
             "_sample_id": self._sample._id,
@@ -128,28 +151,27 @@ class Frames(object):
         }
         if (
             self._iter is not None
-            and frame_number == self._iter_doc.get_field("frame_number")
+            and frame_number == self._iter_frame.frame_number
         ):
-            doc = self._iter_doc
+            frame = self._iter_frame
         elif frame_number in self._replacements:
-            doc = self._replacements[frame_number]
-        elif self._sample._in_db:
+            frame = self._replacements[frame_number]
+        elif self._in_db:
             d = self._frame_collection.find_one(default_d)
             if d is None:
                 d = default_d
-                self._sample._doc.frames["frame_count"] += 1
 
-            doc = self._sample._dataset._frame_dict_to_doc(d)
-            self._set_replacement(doc)
+            frame = Frame.from_doc(
+                self._sample._dataset._frame_dict_to_doc(d),
+                dataset=self._sample._dataset,
+                view=self._view,
+            )
+            self._set_replacement(frame)
         else:
-            doc = NoDatasetFrameSampleDocument(**default_d)
-            self._sample._doc.frames["frame_count"] += 1
-            self._set_replacement(doc)
+            frame = Frame.from_doc(NoDatasetFrameSampleDocument(**default_d))
+            self._set_replacement(frame)
 
-        if self._sample._in_db:
-            dataset = self._sample._dataset
-
-        return Frame.from_doc(doc, dataset=dataset)
+        return frame
 
     def __setitem__(self, frame_number, frame):
         fofu.validate_frame_number(frame_number)
@@ -161,22 +183,21 @@ class Frames(object):
         doc.set_field("frame_number", frame_number)
         doc._sample_id = self._sample._id
 
-        if not self._sample._in_db and frame_number not in self._replacements:
-            self._sample._doc.frames["frame_count"] += 1
-        elif self._sample._in_db:
+        if not self._in_db and frame_number not in self._replacements:
+            pass
+        elif self._in_db:
             if (
-                self._iter_doc is not None
-                and frame_number != self._iter_doc.get_field("frame_number")
+                self._iter_frame is not None
+                and frame_number != self._iter_frame.frame_number
             ):
-                find_d = {
-                    "_sample_id": self._sample._id,
-                    "frame_number": frame_number,
-                }
-                exists = self._frame_collection.find(find_d)
-                if exists is None:
-                    self._sample._doc.frames["frame_count"] += 1
+                self._frame_collection.find(
+                    {
+                        "_sample_id": self._sample._id,
+                        "frame_number": frame_number,
+                    }
+                )
 
-        self._set_replacement(doc)
+        self._set_replacement(frame)
 
     @property
     def field_names(self):
@@ -187,6 +208,18 @@ class Frames(object):
         except:
             return ("frame_number",)
 
+    def first(self):
+        """Returns the first :class:`Frame` for the sample.
+
+        Returns:
+            a :class:`Frame`
+        """
+        try:
+            return next(self.values())
+        except StopIteration:
+            id_str = " '%s'" % self._sample._id if self._sample._id else ""
+            raise ValueError("Sample%s has no frame labels" % id_str)
+
     def keys(self):
         """Returns an iterator over the frame numbers with labels in the
         sample.
@@ -196,8 +229,8 @@ class Frames(object):
         Returns:
             a generator that emits frame numbers
         """
-        for doc in self._iter_docs():
-            yield doc.get_field("frame_number")
+        for frame in self._iter_frames():
+            yield frame.frame_number
 
     def items(self):
         """Returns an iterator over the frame numberes and :class:`Frame`
@@ -208,10 +241,8 @@ class Frames(object):
         Returns:
             a generator that emits ``(frame_number, Frame)`` tuples
         """
-        for doc in self._iter_docs():
-            yield doc.frame_number, Frame.from_doc(
-                doc, dataset=self._sample._dataset
-            )
+        for frame in self._iter_frames():
+            yield frame.frame_number, frame
 
     def values(self):
         """Returns an iterator over the :class:`Frame` instances for the
@@ -222,9 +253,8 @@ class Frames(object):
         Returns:
             a generator that emits :class:`Frame` instances
         """
-        dataset = self._sample._dataset if self._sample._in_db else None
-        for doc in self._iter_docs():
-            yield Frame.from_doc(doc, dataset=dataset)
+        for frame in self._iter_frames():
+            yield frame
 
     def update(self, frames, overwrite=True):
         """Adds the frame labels to this instance.
@@ -248,7 +278,9 @@ class Frames(object):
 
                 self[frame_number] = frame
 
-    def merge(self, frames, overwrite=True):
+    def merge(
+        self, frames, omit_fields=None, omit_none_fields=True, overwrite=True
+    ):
         """Merges the frame labels into this instance.
 
         Args:
@@ -261,6 +293,9 @@ class Frames(object):
                     label fields to :class:`fiftyone.core.labels.Label`
                     instances
 
+            omit_fields (None): an optional list of fields to omit
+            omit_none_fields (True): whether to omit ``None``-valued fields of
+                the provided frames
             overwrite (True): whether to overwrite existing fields
         """
         for frame_number, frame in frames.items():
@@ -268,90 +303,77 @@ class Frames(object):
                 frame = Frame(frame_number=frame_number, **frame)
 
             if frame_number in self:
-                self[frame_number].merge(frame, overwrite=overwrite)
+                self[frame_number].merge(
+                    frame,
+                    omit_fields=omit_fields,
+                    omit_none_fields=omit_none_fields,
+                    overwrite=overwrite,
+                )
             else:
                 self[frame_number] = frame
 
+    def clear(self):
+        """Removes all frames from this instance."""
+        self._replacements = {}
+        if self._in_db:
+            self._frame_collection.delete_many(
+                {"_sample_id": self._sample._id}
+            )
+            self._sample._doc.clear_field("frames")
+
     @property
-    def _first_frame(self):
-        first_frame = self._replacements.get(1, None)
-        if first_frame is None and self._sample._in_db:
-            first_frame = self._sample._doc.frames["first_frame"]
-
-        return first_frame
-
-    def to_mongo_dict(self):
-        first_frame = self._first_frame
-        return {
-            "frame_count": self._sample._doc.frames["frame_count"],
-            "first_frame": self._first_frame,
-        }
+    def _in_db(self):
+        return self._sample._in_db
 
     @property
     def _frame_collection(self):
         return self._sample._dataset._frame_collection
 
-    def _iter_docs(self):
-        if self._sample._in_db:
-            repl_fns = sorted(self._replacements.keys())
-            repl_fn = repl_fns[0] if len(repl_fns) else None
-            find_d = {"_sample_id": self._sample._id}
-            for d in self._frame_collection.find(find_d):
-                if repl_fn is not None and d["frame_number"] >= repl_fn:
-                    self._iter_doc = self._replacements[repl_fn]
-                    repl_fn += 1
-                else:
-                    self._iter_doc = self._sample._dataset._frame_dict_to_doc(
-                        d
-                    )
-
-                self._set_replacement(self._iter_doc)
-                yield self._iter_doc
-        else:
+    def _iter_frames(self):
+        if not self._in_db:
             for frame_number in sorted(self._replacements.keys()):
-                self._iter_doc = self._replacements[frame_number]
-                self._set_replacement(self._iter_doc)
-                yield self._iter_doc
+                self._iter_frame = self._replacements[frame_number]
+                self._set_replacement(self._iter_frame)
+                yield self._iter_frame
+
+            return
+
+        repl_fns = sorted(self._replacements.keys())
+        repl_fn = repl_fns[0] if repl_fns else None
+        view = self._view or self._sample._dataset
+        try:
+            result = next(
+                view.match(F("filepath") == self._sample.filepath)._aggregate()
+            )
+        except:
+            result = {"frames": []}
+
+        for d in result["frames"]:
+            if repl_fn is not None and d["frame_number"] >= repl_fn:
+                self._iter_frame = self._replacements[repl_fn]
+                repl_fn += 1
+            else:
+                self._iter_frame = Frame.from_doc(
+                    self._sample._dataset._frame_dict_to_doc(d),
+                    dataset=self._sample._dataset,
+                    view=self._view,
+                )
+
+            self._set_replacement(self._iter_frame)
+            yield self._iter_frame
+
+    def _to_frames_dict(self):
+        return {
+            str(frame_number): frame.to_dict()
+            for frame_number, frame in self.items()
+        }
 
     def _get_field_cls(self):
         return self._sample._doc.frames.__class__
 
-    def _get_first_frame(self):
-        if 1 in self._replacements:
-            d = self._make_dict(self._replacements[1])
-            d.pop("_sample_id")
-            return d
-
-        return None
-
     def _save(self, insert=False):
-        if not self._sample._in_db:
+        if not self._in_db:
             return
-
-        # @todo avoid local import?
-        from fiftyone.core.labels import _FrameLabels
-
-        d = self._get_first_frame()
-        if d is not None:
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    if "_cls" in v:
-                        # Serialized embedded document
-                        _cls = getattr(fo, v["_cls"])
-                        d[k] = _cls.from_dict(v)
-                    elif "$binary" in v:
-                        # Serialized array in extended format
-                        binary = json_util.loads(json.dumps(v))
-                        d[k] = fou.deserialize_numpy_array(binary)
-                    else:
-                        d[k] = v
-                elif isinstance(v, six.binary_type):
-                    # Serialized array in non-extended format
-                    d[k] = fou.deserialize_numpy_array(v)
-                else:
-                    d[k] = v
-
-            self._sample._doc.frames.first_frame = _FrameLabels(**d)
 
         self._save_replacements(insert)
 
@@ -368,7 +390,7 @@ class Frame(Document):
     directly to :class:`fiftyone.core.sample.Sample` instances.
     """
 
-    # Instance references keyed by [collection_name][_sample_id]
+    # Instance references keyed by [collection_name][sample_id][frame_number]
     _instances = defaultdict(lambda: defaultdict(weakref.WeakValueDictionary))
 
     _COLL_CLS = DatasetFrameSampleDocument
@@ -399,6 +421,9 @@ class Frame(Document):
     def _skip_iter_field_names(self):
         return ("frame_number",)
 
+    def _get_field_names(self, include_private=False):
+        return self._doc._get_field_names(include_private=include_private)
+
     def copy(self):
         """Returns a deep copy of the frame that has not been added to the
         database.
@@ -411,7 +436,7 @@ class Frame(Document):
         return self.__class__(**kwargs)
 
     @classmethod
-    def from_doc(cls, doc, dataset=None):
+    def from_doc(cls, doc, dataset=None, view=None):
         """Creates an instance of the :class:`Frame` class backed by the given
         document.
 
@@ -419,47 +444,154 @@ class Frame(Document):
             doc: a :class:`fiftyone.core.odm.SampleDocument`
             dataset (None): the :class:`fiftyone.core.dataset.Dataset` that the
                 frame belongs to
+            view (None): the :class:`fiftyone.core.view.DatasetView` that the
+                frame belongs to, if any
 
         Returns:
             a :class:`Frame`
         """
         if isinstance(doc, NoDatasetFrameSampleDocument):
-            sample = cls.__new__(cls)
-            sample._dataset = None
-            sample._doc = doc
-            return sample
+            frame = cls.__new__(cls)
+            frame._dataset = None
+            frame._doc = doc
+            return frame
 
-        try:
-            # Get instance if exists
-            sample = cls._instances[doc.collection_name][str(doc._sample_id)][
-                doc.frame_number
-            ]
-        except KeyError:
-            sample = cls.__new__(cls)
-            sample._doc = None  # set to prevent RecursionError
+        frame = None
+        if view is None:
+            try:
+                # Get instance if exists
+                key = str(doc._sample_id)
+                frame = cls._instances[doc.collection_name][key][
+                    doc.frame_number
+                ]
+            except KeyError:
+                pass
+
+        if frame is None:
+            frame = cls.__new__(cls)
+            frame._doc = None  # prevents recursion
             if dataset is None:
                 raise ValueError(
                     "`dataset` arg must be provided if frame is in a dataset"
                 )
 
-            sample._set_backing_doc(doc, dataset=dataset)
+            frame._set_backing_doc(doc, dataset=dataset)
 
-        return sample
+        return frame
 
     def _set_backing_doc(self, doc, dataset=None):
-        """Sets the backing doc for the sample.
+        if not doc.id:
+            doc.save()
 
-        Args:
-            doc: a :class:`fiftyone.core.odm.SampleDocument`
-            dataset (None): the :class:`fiftyone.core.dataset.Dataset` to which
-                the sample belongs, if any
-        """
         self._doc = doc
 
-        # Save weak reference
-        dataset_instances = self._instances[doc.collection_name]
-        _sample_id = str(self._sample_id)
-        if self.frame_number not in dataset_instances[_sample_id]:
-            dataset_instances[_sample_id][self.frame_number] = self
+        frames = self._instances[doc.collection_name][str(self._sample_id)]
+        if self.frame_number not in frames:
+            frames[self.frame_number] = self
 
         self._dataset = dataset
+
+    @classmethod
+    def _rename_fields(cls, collection_name, field_names, new_field_names):
+        if collection_name not in cls._instances:
+            return
+
+        for frames in cls._instances[collection_name].values():
+            for document in frames.values():
+                data = document._doc._data
+                for field_name, new_field_name in zip(
+                    field_names, new_field_names
+                ):
+                    data[new_field_name] = data.pop(field_name, None)
+
+    @classmethod
+    def _clear_fields(cls, collection_name, field_names):
+        if collection_name not in cls._instances:
+            return
+
+        for frames in cls._instances[collection_name].values():
+            for document in frames.values():
+                for field_name in field_names:
+                    document._doc._data[field_name] = None
+
+    @classmethod
+    def _purge_fields(cls, collection_name, field_names):
+        if collection_name not in cls._instances:
+            return
+
+        for frames in cls._instances[collection_name].values():
+            for document in frames.values():
+                for field_name in field_names:
+                    document._doc._data.pop(field_name, None)
+
+    @classmethod
+    def _reload_docs(cls, collection_name, doc_ids=None, sample_ids=None):
+        if collection_name not in cls._instances:
+            return
+
+        samples = cls._instances[collection_name]
+
+        # Reload all docs
+        if doc_ids is None and sample_ids is None:
+            for frames in samples.values():
+                for document in frames.values():
+                    document.reload()
+
+        # Reload docs for samples with `sample_ids`, reset others
+        if sample_ids is not None:
+            reset_ids = set()
+            for sample_id, frames in samples.items():
+                if sample_id in sample_ids:
+                    for document in frames.values():
+                        document.reload()
+                else:
+                    reset_ids.add(sample_id)
+                    for document in frames.values():
+                        document._reset_backing_doc()
+
+            for sample_id in reset_ids:
+                samples.pop(sample_id, None)
+
+        # Reload docs with `doc_ids`, reset others
+        if doc_ids is not None:
+            for frames in samples.values():
+                reset_ids = set()
+                for document in frames.values():
+                    if document.id in doc_ids:
+                        document.reload()
+                    else:
+                        reset_ids.add(document.id)
+                        document._reset_backing_doc()
+
+                for doc_id in reset_ids:
+                    frames.pop(doc_id, None)
+
+    @classmethod
+    def _reset_docs(cls, collection_name, doc_ids=None, sample_ids=None):
+        if collection_name not in cls._instances:
+            return
+
+        # Reset all docs
+        if doc_ids is None and sample_ids is None:
+            samples = cls._instances.pop(collection_name)
+            for frames in samples.values():
+                for document in frames.values():
+                    document._reset_backing_doc()
+
+        # Reset docs for samples with `sample_ids`
+        if sample_ids is not None:
+            samples = cls._instances[collection_name]
+            for sample_id in sample_ids:
+                frames = samples.pop(sample_id, None)
+                if frames is not None:
+                    for document in frames.values():
+                        document._reset_backing_doc()
+
+        # Reset docs with `doc_ids`
+        if doc_ids is not None:
+            samples = cls._instances[collection_name]
+            for frames in samples.values():
+                for doc_id in doc_ids:
+                    document = frames.pop(doc_id, None)
+                    if document is not None:
+                        document._reset_backing_doc()

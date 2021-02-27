@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-Installs FiftyOne.
+Installs the ``fiftyone-db`` package.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -24,15 +24,31 @@ except ImportError:
 
 
 MONGODB_DOWNLOAD_URLS = {
-    "linux": "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.2.6.tgz",
-    "mac": "https://fastdl.mongodb.org/osx/mongodb-macos-x86_64-4.2.6.tgz",
-    "win": "https://fastdl.mongodb.org/win32/mongodb-win32-x86_64-2012plus-4.2.6.zip",
-    "ubuntu1604": "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1604-4.2.6.tgz",
-    "debian9": "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-debian92-4.2.6.tgz",
+    "linux": "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.4.2.tgz",
+    "mac": "https://fastdl.mongodb.org/osx/mongodb-macos-x86_64-4.4.2.tgz",
+    "win": "https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-4.4.2.zip",
+    "ubuntu1604": "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1604-4.4.2.tgz",
+    "debian9": "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-debian92-4.4.2.tgz",
 }
+
 # mongodb binaries to distribute
 MONGODB_BINARIES = ["mongod"]
 LINUX_DISTRO = os.environ.get("FIFTYONE_DB_BUILD_LINUX_DISTRO")
+
+VERSION = "0.2.1"
+
+
+def get_version():
+    if "RELEASE_VERSION" in os.environ:
+        version = os.environ["RELEASE_VERSION"]
+        if not version.startswith(VERSION):
+            raise ValueError(
+                "Release version does not match version: %s and %s"
+                % (version, VERSION)
+            )
+        return version
+
+    return VERSION
 
 
 class CustomBdistWheel(bdist_wheel):
@@ -40,15 +56,16 @@ class CustomBdistWheel(bdist_wheel):
         bdist_wheel.finalize_options(self)
         # not pure Python
         self.root_is_pure = False
+        self._plat_name = self.plat_name
         # rewrite platform name to match what mongodb supports
         if self.plat_name.startswith("mac"):
-            # mongodb 4.2.6 supports macOS 10.12 or later
+            # mongodb 4.4.6 supports macOS 10.13 or later
             # https://docs.mongodb.com/manual/tutorial/install-mongodb-on-os-x/#platform-support
             # also, we only distribute 64-bit binaries
             self.plat_name = "macosx_10_12_x86_64"
         elif self.plat_name.startswith("linux"):
             # we only distribute 64-bit binaries
-            self.plat_name = "linux_x86_64"
+            self.plat_name = "manylinux1_x86_64"
         elif self.plat_name.startswith("win"):
             # we only distribute 64-bit binaries
             self.plat_name = "win_amd64"
@@ -73,10 +90,10 @@ class CustomBdistWheel(bdist_wheel):
         mongo_zip_url = next(
             v
             for k, v in MONGODB_DOWNLOAD_URLS.items()
-            if self.plat_name.startswith(k)
+            if self._plat_name.startswith(k)
         )
-        if LINUX_DISTRO is not None:
-            if not self.plat_name.startswith("linux"):
+        if LINUX_DISTRO:
+            if not self.plat_name.startswith("manylinux"):
                 raise ValueError(
                     "Cannot build for distro %r on platform %r"
                     % (LINUX_DISTRO, self.plat_name)
@@ -149,23 +166,40 @@ name_suffix = ""
 if LINUX_DISTRO:
     name_suffix = "_" + LINUX_DISTRO
 
+with open("README.md", "r") as fh:
+    long_description = fh.read()
+
 setup(
     name="fiftyone_db" + name_suffix,
-    version="0.1.2",
-    description="Project FiftyOne database",
+    version=get_version(),
+    description="FiftyOne DB",
     author="Voxel51, Inc.",
     author_email="info@voxel51.com",
     url="https://github.com/voxel51/fiftyone",
-    license="",
+    license="Apache",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     packages=["fiftyone.db"],
     package_dir={"fiftyone.db": "src"},
     classifiers=[
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: Apache Software License",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "Topic :: Scientific/Engineering :: Image Processing",
+        "Topic :: Scientific/Engineering :: Image Recognition",
+        "Topic :: Scientific/Engineering :: Information Analysis",
+        "Topic :: Scientific/Engineering :: Visualization",
         "Operating System :: MacOS :: MacOS X",
         "Operating System :: POSIX :: Linux",
         "Operating System :: Microsoft :: Windows",
-        "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
     ],
-    python_requires=">=2.7",
+    python_requires=">=3.6",
     cmdclass=cmdclass,
 )

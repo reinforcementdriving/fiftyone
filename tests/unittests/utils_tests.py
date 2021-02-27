@@ -1,18 +1,21 @@
 """
 FiftyOne utilities unit tests.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
+import time
 import unittest
 
 from mongoengine.errors import ValidationError
 import numpy as np
 
 import fiftyone as fo
+import fiftyone.constants as foc
 import fiftyone.core.media as fom
-from fiftyone.migrations.runner import Runner
+import fiftyone.core.uid as fou
+from fiftyone.migrations.runner import MigrationRunner
 
 from decorators import drop_datasets
 
@@ -182,24 +185,45 @@ class MediaTypeTests(unittest.TestCase):
 class MigrationTests(unittest.TestCase):
     def test_runner(self):
         def revs(versions):
-            return list(map(lambda v: (v, v + ".py"), versions))
+            return [(v, v + ".py") for v in versions]
 
-        runner = Runner(
-            head=None, destination="0.3", revisions=revs(["0.1", "0.2", "0.3"])
+        runner = MigrationRunner(
+            head="0.0.1",
+            destination="0.3",
+            _revisions=revs(["0.1", "0.2", "0.3"]),
         )
         self.assertEqual(runner.revisions, ["0.1", "0.2", "0.3"])
-        runner = Runner(
+
+        runner = MigrationRunner(
             head="0.1",
             destination="0.3",
-            revisions=revs(["0.1", "0.2", "0.3"]),
+            _revisions=revs(["0.1", "0.2", "0.3"]),
         )
         self.assertEqual(runner.revisions, ["0.2", "0.3"])
-        runner = Runner(
-            head="0.3", destination=None, revisions=revs(["0.1", "0.2", "0.3"])
+
+        runner = MigrationRunner(
+            head="0.3",
+            destination="0.1",
+            _revisions=revs(["0.1", "0.2", "0.3"]),
+        )
+        self.assertEqual(runner.revisions, ["0.3", "0.2"])
+
+        runner = MigrationRunner(
+            head="0.3",
+            destination="0.0.1",
+            _revisions=revs(["0.1", "0.2", "0.3"]),
         )
         self.assertEqual(runner.revisions, ["0.3", "0.2", "0.1"])
-        runner = Runner(head=None, destination="0.1", revisions=revs(["0.1"]))
-        self.assertEqual(runner.revisions, ["0.1"])
+
+
+class UIDTests(unittest.TestCase):
+    def test_log_import(self):
+        fo.config.do_not_track = False
+        foc.UA_ID = foc.UA_DEV
+
+        fou.log_import_if_allowed(test=True)
+        time.sleep(2)
+        self.assertTrue(fou._import_logged)
 
 
 if __name__ == "__main__":

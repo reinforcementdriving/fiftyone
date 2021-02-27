@@ -1,7 +1,7 @@
 """
 Dataset sample fields.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -316,3 +316,6 @@ class EmbeddedDocumentField(mongoengine.EmbeddedDocumentField, Field):
             etau.get_class_name(self),
             etau.get_class_name(self.document_type),
         )
+
+
+_ARRAY_FIELDS = (VectorField, ArrayField)

@@ -1,7 +1,7 @@
 """
 Sphinx custom directives.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -39,16 +39,26 @@ class CustomCardItemDirective(Directive):
         header = self.options.get("header", "")
         description = self.options.get("description", "")
         link = self.options.get("link", "")
-        image = '<img src="%s">' % self.options.get("image", "")
+        image = self.options.get("image", "")
         tags = self.options.get("tags", "")
 
-        card_rst = _CUSTOM_CARD_TEMPLATE.format(
-            header=header,
-            description=description,
-            link=link,
-            image=image,
-            tags=tags,
-        )
+        if image:
+            card_rst = _CUSTOM_CARD_TEMPLATE.format(
+                header=header,
+                description=description,
+                link=link,
+                image='<img src="%s">' % image,
+                tags=tags,
+            )
+        else:
+            # No image
+            template = _CUSTOM_CARD_TEMPLATE.replace(
+                '<div class="tutorials-image">{image}</div>', ""
+            )
+
+            card_rst = template.format(
+                header=header, description=description, link=link, tags=tags,
+            )
 
         card_list = StringList(card_rst.split("\n"))
         card = nodes.paragraph()

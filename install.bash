@@ -4,7 +4,7 @@
 # Usage:
 #   bash install.bash
 #
-# Copyright 2017-2020, Voxel51, Inc.
+# Copyright 2017-2021, Voxel51, Inc.
 # voxel51.com
 #
 
@@ -45,12 +45,11 @@ cd eta
 git checkout develop
 git pull
 pip install -e .
-if [[ ! -f config.json ]]; then
+if [[ ! -f eta/config.json ]]; then
     echo "Installing default ETA config"
-    cp config-example.json config.json
+    cp config-example.json eta/config.json
 fi
 cd ..
-
 
 echo "***** INSTALLING PLAYER51 *****"
 git submodule update --init
@@ -58,33 +57,42 @@ git submodule update --init
 echo "***** INSTALLING MONGODB *****"
 mkdir -p ~/.fiftyone/bin
 cd ~/.fiftyone
-mkdir -p var/log/mongodb
 mkdir -p var/lib/mongo
+INSTALL_MONGODB=true
 if [ -x bin/mongod ]; then
-    echo "MongoDB already installed"
-elif [ "${OS}" == "Darwin" ]; then
-    curl https://fastdl.mongodb.org/osx/mongodb-macos-x86_64-4.2.6.tgz --output mongodb.tgz
-    tar -zxvf mongodb.tgz
-    mv mongodb-macos-x86_64-4.2.6/bin/* ./bin/
-    rm mongodb.tgz
-    rm -rf mongodb-macos-x86_64-4.2.6
-elif [ "${OS}" == "Linux" ]; then
-    curl https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.2.6.tgz --output mongodb.tgz
-    tar -zxvf mongodb.tgz
-    mv mongodb-linux-x86_64-ubuntu1804-4.2.6/bin/* ./bin/
-    rm mongodb.tgz
-    rm -rf mongodb-linux-x86_64-ubuntu1804-4.2.6
+    VERSION_FULL=$(bin/mongod --version | grep 'db version')
+    VERSION="${VERSION_FULL:12}"
+    if [ ${VERSION} != "4.4.2" ]; then
+        echo "Upgrading MongoDB v${VERSION} to v4.4.2"
+    else
+        echo "MongoDB v4.4.2 already installed"
+        INSTALL_MONGODB=false
+    fi
 else
-    echo "WARNING: unsupported OS, skipping MongoDB installation"
+    echo "Installing MongoDB v4.4.2"
+fi
+if [ ${INSTALL_MONGODB} = true ]; then
+    if [ "${OS}" == "Darwin" ]; then
+        MONGODB_BUILD=mongodb-macos-x86_64-4.4.2
+
+        curl https://fastdl.mongodb.org/osx/${MONGODB_BUILD}.tgz --output mongodb.tgz
+        tar -zxvf mongodb.tgz
+        mv ${MONGODB_BUILD}/bin/* ./bin/
+        rm mongodb.tgz
+        rm -rf ${MONGODB_BUILD}
+    elif [ "${OS}" == "Linux" ]; then
+        MONGODB_BUILD=mongodb-linux-x86_64-ubuntu1804-4.4.2
+
+        curl https://fastdl.mongodb.org/linux/${MONGODB_BUILD}.tgz --output mongodb.tgz
+        tar -zxvf mongodb.tgz
+        mv ${MONGODB_BUILD}/bin/* ./bin/
+        rm mongodb.tgz
+        rm -rf ${MONGODB_BUILD}
+    else
+        echo "WARNING: unsupported OS, skipping MongoDB installation"
+    fi
 fi
 cd -
-
-
-echo "***** INSTALLING ELECTRON APP *****"
-cd electron
-yarn install
-cd ..
-
 
 echo "***** INSTALLING FIFTYONE *****"
 if [ ${DEV_INSTALL} = true ]; then
@@ -96,5 +104,23 @@ else
 fi
 pip install -e .
 
+echo "***** INSTALLING APP *****"
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.37.2/install.sh | bash
+export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" # This loads nvm
+nvm install v12.16.2
+nvm use v12.16.2
+npm -g install yarn
+if [ -f ~/.bashrc ]; then
+    source ~/.bashrc
+elif [ -f ~/.bash_profile ]; then
+    source ~/.bash_profile
+else
+    echo "WARNING: unable to locate a bash profile to 'source'; you may need to start a new shell"
+fi
+cd app
+yarn
+yarn build-web
+cd ..
 
 echo "***** INSTALLATION COMPLETE *****"

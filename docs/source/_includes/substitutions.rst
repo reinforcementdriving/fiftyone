@@ -1,8 +1,8 @@
 .. |Dataset| replace:: :class:`Dataset <fiftyone.core.dataset.Dataset>`
-.. |WhatIsAFiftyOneDataset| replace:: :ref:`FiftyOne Dataset <what-is-a-fiftyone-dataset>`
+
+.. |SampleCollection| replace:: :class:`SampleCollection <fiftyone.core.collections.SampleCollection>`
 
 .. |DatasetView| replace:: :class:`DatasetView <fiftyone.core.view.DatasetView>`
-
 .. |ViewStage| replace:: :class:`ViewStage <fiftyone.core.stages.ViewStage>`
 
 .. |Sample| replace:: :class:`Sample <fiftyone.core.sample.Sample>`
@@ -11,6 +11,10 @@
 .. |Frame| replace:: :class:`Frame <fiftyone.core.frame.Frame>`
 
 .. |Field| replace:: :class:`Field <fiftyone.core.fields.Field>`
+.. |BooleanField| replace:: :class:`BooleanField <fiftyone.core.fields.BooleanField>`
+.. |IntField| replace:: :class:`IntField <fiftyone.core.fields.IntField>`
+.. |FloatField| replace:: :class:`FloatField <fiftyone.core.fields.FloatField>`
+.. |StringField| replace:: :class:`StringField <fiftyone.core.fields.StringField>`
 .. |ListField| replace:: :class:`ListField <fiftyone.core.fields.ListField>`
 .. |DictField| replace:: :class:`DictField <fiftyone.core.fields.DictField>`
 
@@ -65,5 +69,23 @@
 .. |VideoMetadata| replace:: :class:`VideoMetadata <fiftyone.core.metadata.VideoMetadata>`
 
 .. |AnnotationConfig| replace:: :class:`AnnotationConfig <fiftyone.utils.annotations.AnnotationConfig>`
+.. |AppConfig| replace:: :class:`AppConfig <fiftyone.core.config.AppConfig>`
 
 .. |Session| replace:: :class:`Session <fiftyone.core.session.Session>`
+
+.. |Aggregation| replace:: :class:`Aggregation <fiftyone.core.aggregations.Aggregation>`
+
+.. |Model| replace:: :class:`Model <fiftyone.core.models.Model>`
+.. |ModelConfig| replace:: :class:`ModelConfig <fiftyone.core.models.ModelConfig>`
+
+.. |LogitsMixin| replace:: :class:`LogitsMixin <fiftyone.core.models.LogitsMixin>`
+.. |EmbeddingsMixin| replace:: :class:`EmbeddingsMixin <fiftyone.core.models.EmbeddingsMixin>`
+.. |TorchModelMixin| replace:: :class:`TorchModelMixin <fiftyone.core.models.TorchModelMixin>`
+
+.. |EvaluationResults| replace:: :class:`EvaluationResults <fiftyone.utils.eval.base.EvaluationResults>`
+.. |ClassificationResults| replace:: :class:`ClassificationResults <fiftyone.utils.eval.classification.ClassificationResults>`
+.. |BinaryClassificationResults| replace:: :class:`BinaryClassificationResults <fiftyone.utils.eval.classification.BinaryClassificationResults>`
+.. |DetectionResults| replace:: :class:`DetectionResults <fiftyone.utils.eval.detection.DetectionResults>`
+.. |SegmentationResults| replace:: :class:`SegmentationResults <fiftyone.utils.eval.segmentation.SegmentationResults>`
+
+.. |COCOEvaluationConfig| replace:: :class:`COCOEvaluationConfig <fiftyone.utils.eval.coco.COCOEvaluationConfig>`

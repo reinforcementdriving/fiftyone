@@ -1,33 +1,38 @@
 """
 Mixins and helpers for sample backing documents.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
 from collections import OrderedDict
-from functools import wraps
 import json
+import logging
 import numbers
 import six
 
 from bson import json_util
 from bson.binary import Binary
-from mongoengine.errors import InvalidQueryError
 import numpy as np
 
 import fiftyone as fo
+import fiftyone.core.fields as fof
+import fiftyone.core.utils as fou
+
+from .database import get_db_conn
 from .dataset import SampleFieldDocument, DatasetDocument
 from .document import Document, BaseEmbeddedDocument, SampleDocument
-import fiftyone.core.fields as fof
-import fiftyone.core.media as fomm
-import fiftyone.core.utils as fou
+
+
+logger = logging.getLogger(__name__)
 
 
 def default_sample_fields(cls, include_private=False, include_id=False):
-    """The default fields present on all :class:`SampleDocument` objects.
+    """Returns the default fields present on all instances of the given
+    :class:`SampleDocument` class.
 
     Args:
+        cls: the :class:`SampleDocument` class
         include_private (False): whether to include fields that start with `_`
         include_id (False): whether to include the ``id`` field
 
@@ -41,52 +46,12 @@ def default_sample_fields(cls, include_private=False, include_id=False):
     return fields
 
 
-def no_rename_default_field(func):
-    """Wrapper for :func:`SampleDocument.rename_field` that prevents renaming
-    default fields of :class:`SampleDocument`.
-
-    This is a decorator because the subclasses implement this as either an
-    instance or class method.
-    """
-
-    @wraps(func)
-    def wrapper(cls_or_self, field_name, *args, **kwargs):
-        # pylint: disable=no-member
-        if field_name in default_sample_fields(
-            cls_or_self.__bases__[0], include_private=True, include_id=True
-        ):
-            raise ValueError("Cannot rename default field '%s'" % field_name)
-
-        return func(cls_or_self, field_name, *args, **kwargs)
-
-    return wrapper
-
-
-def no_delete_default_field(func):
-    """Wrapper for :func:`SampleDocument.delete_field` that prevents deleting
-    default fields of :class:`SampleDocument`.
-
-    This is a decorator because the subclasses implement this as either an
-    instance or class method.
-    """
-
-    @wraps(func)
-    def wrapper(cls_or_self, field_name, *args, **kwargs):
-        # pylint: disable=no-member
-        if field_name in default_sample_fields(
-            cls_or_self.__bases__[0], include_private=True, include_id=True
-        ):
-            raise ValueError("Cannot delete default field '%s'" % field_name)
-
-        return func(cls_or_self, field_name, *args, **kwargs)
-
-    return wrapper
-
-
 class DatasetMixin(object):
     """Mixin for concrete :class:`fiftyone.core.odm.document.SampleDocument`
     subtypes that are backed by a dataset.
     """
+
+    _FRAME_COLLECTION_PREFIX = "frames."
 
     def __setattr__(self, name, value):
         # pylint: disable=no-member
@@ -101,6 +66,7 @@ class DatasetMixin(object):
                 "Adding sample fields using the `sample.field = value` syntax "
                 "is not allowed; use `sample['field'] = value` instead"
             )
+
         if value is not None:
             self._fields[name].validate(value)
 
@@ -112,11 +78,41 @@ class DatasetMixin(object):
 
     @property
     def field_names(self):
-        return tuple(
-            f
-            for f in self._get_fields_ordered(include_private=False)
-            if f != "id"
+        return self._get_fields_ordered(include_private=False)
+
+    def _get_field_names(self, include_private=False):
+        return self._get_fields_ordered(include_private=include_private)
+
+    @classmethod
+    def _is_frames_doc(cls):
+        return cls.__name__.startswith(cls._FRAME_COLLECTION_PREFIX)
+
+    @classmethod
+    def _sample_collection_name(cls):
+        name = cls.__name__
+        if name.startswith(cls._FRAME_COLLECTION_PREFIX):
+            name = name[len(cls._FRAME_COLLECTION_PREFIX) :]
+
+        return name
+
+    @classmethod
+    def _frame_collection_name(cls):
+        name = cls.__name__
+        if not name.startswith(cls._FRAME_COLLECTION_PREFIX):
+            name = cls._FRAME_COLLECTION_PREFIX + name
+
+        return name
+
+    @classmethod
+    def _dataset_doc(cls):
+        # pylint: disable=no-member
+        return DatasetDocument.objects.get(
+            sample_collection_name=cls._sample_collection_name()
         )
+
+    @classmethod
+    def _dataset_doc_fields_col(cls):
+        return "sample_fields"
 
     @classmethod
     def get_field_schema(
@@ -173,6 +169,32 @@ class DatasetMixin(object):
 
         return d
 
+    @classmethod
+    def merge_field_schema(cls, schema):
+        """Merges the field schema into the sample.
+
+        Args:
+            schema: a dictionary mapping field names to field types
+
+        Raises:
+            ValueError: if a field in the schema is not compliant with an
+                existing field of the same name
+        """
+        _schema = cls.get_field_schema()
+
+        add_fields = []
+        for field_name, field in schema.items():
+            if field_name in _schema:
+                validate_fields_match(field_name, field, _schema[field_name])
+            else:
+                add_fields.append(field_name)
+
+        for field_name in add_fields:
+            field = schema[field_name]
+            cls._add_field_schema(
+                field_name, save=True, **get_field_kwargs(field)
+            )
+
     def has_field(self, field_name):
         # pylint: disable=no-member
         return field_name in self._fields
@@ -209,54 +231,17 @@ class DatasetMixin(object):
         """
         # Additional arg `save` is to prevent saving the fields when reloading
         # a dataset from the database.
-
-        # pylint: disable=no-member
-        if field_name in cls._fields:
-            raise ValueError("Field '%s' already exists" % field_name)
-
-        field = _create_field(
+        cls._add_field_schema(
             field_name,
             ftype,
             embedded_doc_type=embedded_doc_type,
             subfield=subfield,
-            kwargs=kwargs,
+            save=save,
+            **kwargs
         )
 
-        cls._fields[field_name] = field
-        cls._fields_ordered += (field_name,)
-        try:
-            if issubclass(cls, SampleDocument):
-                # Only set the attribute if it is a class
-                setattr(cls, field_name, field)
-        except TypeError:
-            # Instance, not class, so do not `setattr`
-            pass
-
-        if save:
-            # Update dataset meta class
-            dataset_doc = DatasetDocument.objects.get(
-                sample_collection_name=cls._sample_collection_name()
-            )
-
-            field = cls._fields[field_name]
-            sample_field = SampleFieldDocument.from_field(field)
-            dataset_doc[cls._dataset_doc_fields_col()].append(sample_field)
-            dataset_doc.save()
-
     @classmethod
-    def _sample_collection_name(cls):
-        return cls.__name__
-
-    @classmethod
-    def _dataset_doc_fields_col(cls):
-        return "sample_fields"
-
-    @classmethod
-    def _frame_collection_name(cls):
-        return "frames." + cls.__name__
-
-    @classmethod
-    def add_implied_field(cls, field_name, value, **kwargs):
+    def add_implied_field(cls, field_name, value):
         """Adds the field to the sample, inferring the field type from the
         provided value.
 
@@ -268,7 +253,7 @@ class DatasetMixin(object):
         if field_name in cls._fields:
             raise ValueError("Field '%s' already exists" % field_name)
 
-        cls.add_field(field_name, **get_implied_field_kwargs(value, **kwargs))
+        cls.add_field(field_name, **get_implied_field_kwargs(value))
 
     def set_field(self, field_name, value, create=False):
         if field_name.startswith("_"):
@@ -286,8 +271,8 @@ class DatasetMixin(object):
             else:
                 msg = "Sample does not have field '%s'." % field_name
                 if value is not None:
-                    # don't report this when clearing a field.
-                    msg += " Use `create=True` to create a new field."
+                    msg += " Use `create=True` to create a new field"
+
                 raise ValueError(msg)
 
         self.__setattr__(field_name, value)
@@ -296,28 +281,346 @@ class DatasetMixin(object):
         self.set_field(field_name, None, create=False)
 
     @classmethod
-    @no_rename_default_field
-    def rename_field(cls, field_name, new_field_name):
-        """Renames the field of the sample(s).
-
-        If the sample is in a dataset, the field will be renamed on all samples
-        in the dataset.
+    def _rename_fields(
+        cls, field_names, new_field_names, are_frame_fields=False
+    ):
+        """Renames the fields of the samples in this collection.
 
         Args:
-            field_name: the field name
-            new_field_name: the new field name
-
-        Raises:
-            AttributeError: if the field does not exist
+            field_names: an iterable of field names
+            new_field_names: an iterable of new field names
+            are_frame_fields (False): whether these are frame-level fields
         """
-        try:
-            # Rename field on all samples
-            # pylint: disable=no-member
-            cls.objects.update(**{"rename__%s" % field_name: new_field_name})
-        except InvalidQueryError:
-            raise AttributeError("Sample has no field '%s'" % field_name)
+        default_fields = default_sample_fields(
+            cls.__bases__[0], include_private=True, include_id=True
+        )
+        for field_name in field_names:
+            if field_name in default_fields:
+                raise ValueError(
+                    "Cannot rename default field '%s'" % field_name
+                )
 
-        # Rename field on dataset
+            # pylint: disable=no-member
+            if field_name not in cls._fields:
+                raise AttributeError("Field '%s' does not exist" % field_name)
+
+        if not field_names:
+            return
+
+        for field_name, new_field_name in zip(field_names, new_field_names):
+            cls._rename_field_schema(
+                field_name, new_field_name, are_frame_fields
+            )
+
+        cls._rename_fields_simple(field_names, new_field_names)
+
+    @classmethod
+    def _rename_embedded_fields(
+        cls, field_names, new_field_names, sample_collection
+    ):
+        """Renames the embedded field of the samples in this collection.
+
+        Args:
+            field_names: an iterable of "embedded.field.names"
+            new_field_names: an iterable of "new.embedded.field.names"
+            sample_collection: the
+                :class:`fiftyone.core.samples.SampleCollection` being operated
+                upon
+        """
+        if not field_names:
+            return
+
+        cls._rename_fields_collection(
+            field_names, new_field_names, sample_collection
+        )
+
+    @classmethod
+    def _clone_fields(
+        cls, field_names, new_field_names, sample_collection=None
+    ):
+        """Clones the field(s) of the samples in this collection.
+
+        Args:
+            field_names: an iterable of field names
+            new_field_names: an iterable of new field names
+            sample_collection (None): the
+                :class:`fiftyone.core.samples.SampleCollection` being operated
+                upon
+        """
+        if not field_names:
+            return
+
+        for field_name in field_names:
+            # pylint: disable=no-member
+            if field_name not in cls._fields:
+                raise AttributeError("Field '%s' does not exist" % field_name)
+
+        for field_name, new_field_name in zip(field_names, new_field_names):
+            cls._clone_field_schema(field_name, new_field_name)
+
+        if sample_collection is None:
+            cls._clone_fields_simple(field_names, new_field_names)
+        else:
+            cls._clone_fields_collection(
+                field_names, new_field_names, sample_collection
+            )
+
+    @classmethod
+    def _clone_embedded_fields(
+        cls, field_names, new_field_names, sample_collection
+    ):
+        """Clones the embedded field(s) of the samples in this collection.
+
+        Args:
+            field_names: an iterable of "embedded.field.names"
+            new_field_names: an iterable of "new.embedded.field.names"
+            sample_collection: the
+                :class:`fiftyone.core.samples.SampleCollection` being operated
+                upon
+        """
+        if not field_names:
+            return
+
+        cls._clone_fields_collection(
+            field_names, new_field_names, sample_collection
+        )
+
+    @classmethod
+    def _clear_fields(cls, field_names, sample_collection=None):
+        """Clears the field(s) of the samples in this collection.
+
+        Args:
+            field_names: an iterable of field names
+            sample_collection (None): the
+                :class:`fiftyone.core.samples.SampleCollection` being operated
+                upon
+        """
+        if not field_names:
+            return
+
+        if sample_collection is None:
+            cls._clear_fields_simple(field_names)
+        else:
+            cls._clear_fields_collection(field_names, sample_collection)
+
+    @classmethod
+    def _clear_embedded_fields(cls, field_names, sample_collection):
+        """Clears the embedded field(s) on the samples in this collection.
+
+        Args:
+            field_names: an iterable of "embedded.field.names"
+            sample_collection: the
+                :class:`fiftyone.core.samples.SampleCollection` being operated
+                upon
+        """
+        if not field_names:
+            return
+
+        cls._clear_fields_collection(field_names, sample_collection)
+
+    @classmethod
+    def _delete_fields(
+        cls, field_names, are_frame_fields=False, error_level=0
+    ):
+        """Deletes the field(s) from the samples in this collection.
+
+        Args:
+            field_names: an iterable of field names
+            are_frame_fields (False): whether these are frame-level fields
+            error_level (0): the error level to use. Valid values are:
+
+                0: raise error if a field cannot be deleted
+                1: log warning if a field cannot be deleted
+                2: ignore fields that cannot be deleted
+        """
+        _field_names = []
+        default_fields = default_sample_fields(
+            cls.__bases__[0], include_private=True, include_id=True
+        )
+        for field_name in field_names:
+            # pylint: disable=no-member
+            if field_name in default_fields:
+                _handle_error(
+                    ValueError(
+                        "Cannot delete default field '%s'" % field_name
+                    ),
+                    error_level,
+                )
+            elif field_name not in cls._fields:
+                _handle_error(
+                    AttributeError("Field '%s' does not exist" % field_name),
+                    error_level,
+                )
+            else:
+                _field_names.append(field_name)
+
+        if not _field_names:
+            return
+
+        for field_name in _field_names:
+            cls._delete_field_schema(field_name, are_frame_fields)
+
+        cls._delete_fields_simple(_field_names)
+
+    @classmethod
+    def _delete_embedded_fields(cls, field_names):
+        """Deletes the embedded field(s) from the samples in this collection.
+
+        Args:
+            field_names: an iterable of "embedded.field.names"
+        """
+        if not field_names:
+            return
+
+        cls._delete_fields_simple(field_names)
+
+    @classmethod
+    def _rename_fields_simple(cls, field_names, new_field_names):
+        rename_expr = {k: v for k, v in zip(field_names, new_field_names)}
+
+        collection_name = cls.__name__
+        collection = get_db_conn()[collection_name]
+        collection.update_many({}, {"$rename": rename_expr})
+
+    @classmethod
+    def _rename_fields_collection(
+        cls, field_names, new_field_names, sample_collection
+    ):
+        from fiftyone import ViewField as F
+
+        if cls._is_frames_doc():
+            prefix = sample_collection._FRAMES_PREFIX
+            field_names = [prefix + f for f in field_names]
+            new_field_names = [prefix + f for f in new_field_names]
+
+        field_roots = set()
+        view = sample_collection.view()
+        for field_name, new_field_name in zip(field_names, new_field_names):
+            field_roots.add(field_name.split(".", 1)[0])
+            field_roots.add(new_field_name.split(".", 1)[0])
+
+            new_base = new_field_name.rsplit(".", 1)[0]
+            if "." in field_name:
+                base, leaf = field_name.rsplit(".", 1)
+            else:
+                base, leaf = field_name, ""
+
+            expr = F(leaf) if new_base == base else F("$" + field_name)
+            view = view.set_field(new_field_name, expr)
+
+        view = view.mongo([{"$unset": field_names}])
+
+        view.save(list(field_roots))
+
+    @classmethod
+    def _clone_fields_simple(cls, field_names, new_field_names):
+        set_expr = {v: "$" + k for k, v in zip(field_names, new_field_names)}
+
+        collection_name = cls.__name__
+        collection = get_db_conn()[collection_name]
+        collection.update_many({}, [{"$set": set_expr}])
+
+    @classmethod
+    def _clone_fields_collection(
+        cls, field_names, new_field_names, sample_collection
+    ):
+        from fiftyone import ViewField as F
+
+        if cls._is_frames_doc():
+            prefix = sample_collection._FRAMES_PREFIX
+            field_names = [prefix + f for f in field_names]
+            new_field_names = [prefix + f for f in new_field_names]
+
+        new_field_roots = set()
+        view = sample_collection.view()
+        for field_name, new_field_name in zip(field_names, new_field_names):
+            new_field_roots.add(new_field_name.split(".", 1)[0])
+
+            new_base = new_field_name.rsplit(".", 1)[0]
+            if "." in field_name:
+                base, leaf = field_name.rsplit(".", 1)
+            else:
+                base, leaf = field_name, ""
+
+            expr = F(leaf) if new_base == base else F("$" + field_name)
+            view = view.set_field(new_field_name, expr)
+
+        #
+        # Ideally only the embedded field would be merged in, but the `$merge`
+        # operator will always overwrite top-level fields of each sample, so we
+        # limit the damage by projecting onto the modified fields
+        #
+        view.save(list(new_field_roots))
+
+    @classmethod
+    def _clear_fields_simple(cls, field_names):
+        collection_name = cls.__name__
+        collection = get_db_conn()[collection_name]
+        collection.update_many({}, {"$set": {k: None for k in field_names}})
+
+    @classmethod
+    def _clear_fields_collection(cls, field_names, sample_collection):
+        field_roots = set()
+        view = sample_collection.view()
+        for field_name in field_names:
+            field_roots.add(field_name.split(".", 1)[0])
+            view = view.set_field(field_name, None)
+
+        #
+        # Ideally only the embedded field would be merged in, but the `$merge`
+        # operator will always overwrite top-level fields of each sample, so we
+        # limit the damage by projecting onto the modified fields
+        #
+        view.save(list(field_roots))
+
+    @classmethod
+    def _delete_fields_simple(cls, field_names):
+        collection_name = cls.__name__
+        collection = get_db_conn()[collection_name]
+        collection.update_many({}, [{"$unset": field_names}])
+
+    @classmethod
+    def _add_field_schema(
+        cls,
+        field_name,
+        ftype,
+        embedded_doc_type=None,
+        subfield=None,
+        save=True,
+        **kwargs
+    ):
+        # pylint: disable=no-member
+        if field_name in cls._fields:
+            raise ValueError("Field '%s' already exists" % field_name)
+
+        field = _create_field(
+            field_name,
+            ftype,
+            embedded_doc_type=embedded_doc_type,
+            subfield=subfield,
+            kwargs=kwargs,
+        )
+
+        cls._fields[field_name] = field
+        cls._fields_ordered += (field_name,)
+        try:
+            if issubclass(cls, SampleDocument):
+                setattr(cls, field_name, field)
+        except TypeError:
+            # Instance, not class, so do not `setattr`
+            pass
+
+        if save:
+            dataset_doc = cls._dataset_doc()
+            field = cls._fields[field_name]
+            sample_field = SampleFieldDocument.from_field(field)
+            dataset_doc[cls._dataset_doc_fields_col()].append(sample_field)
+            dataset_doc.save()
+
+    @classmethod
+    def _rename_field_schema(
+        cls, field_name, new_field_name, are_frame_fields
+    ):
         # pylint: disable=no-member
         field = cls._fields[field_name]
         field = _rename_field(field, new_field_name)
@@ -328,46 +631,37 @@ class DatasetMixin(object):
             for fn in cls._fields_ordered
         )
         delattr(cls, field_name)
+
         try:
             if issubclass(cls, Document):
-                # Only set the attribute if it is a class
                 setattr(cls, new_field_name, field)
         except TypeError:
             # Instance, not class, so do not `setattr`
             pass
 
-        # Update dataset document
-        dataset_doc = DatasetDocument.objects.get(
-            sample_collection_name=cls.__name__
-        )
-        for sf in dataset_doc.sample_fields:
-            if sf.name == field_name:
-                sf.name = new_field_name
+        dataset_doc = cls._dataset_doc()
+
+        if are_frame_fields:
+            for f in dataset_doc.frame_fields:
+                if f.name == field_name:
+                    f.name = new_field_name
+        else:
+            for f in dataset_doc.sample_fields:
+                if f.name == field_name:
+                    f.name = new_field_name
 
         dataset_doc.save()
 
     @classmethod
-    @no_delete_default_field
-    def delete_field(cls, field_name):
-        """Deletes the field from the sample(s).
+    def _clone_field_schema(cls, field_name, new_field_name):
+        # pylint: disable=no-member
+        field = cls._fields[field_name]
+        cls._add_field_schema(
+            new_field_name, save=True, **get_field_kwargs(field)
+        )
 
-        If the sample is in a dataset, the field will be removed from all
-        samples in the dataset.
-
-        Args:
-            field_name: the field name
-
-        Raises:
-            AttributeError: if the field does not exist
-        """
-        try:
-            # Delete from all samples
-            # pylint: disable=no-member
-            cls.objects.update(**{"unset__%s" % field_name: None})
-        except InvalidQueryError:
-            raise AttributeError("Sample has no field '%s'" % field_name)
-
-        # Remove from dataset
+    @classmethod
+    def _delete_field_schema(cls, field_name, are_frame_fields):
         # pylint: disable=no-member
         del cls._fields[field_name]
         cls._fields_ordered = tuple(
@@ -375,13 +669,17 @@ class DatasetMixin(object):
         )
         delattr(cls, field_name)
 
-        # Update dataset document
-        dataset_doc = DatasetDocument.objects.get(
-            sample_collection_name=cls.__name__
-        )
-        dataset_doc.sample_fields = [
-            sf for sf in dataset_doc.sample_fields if sf.name != field_name
-        ]
+        dataset_doc = cls._dataset_doc()
+
+        if are_frame_fields:
+            dataset_doc.frame_fields = [
+                f for f in dataset_doc.frame_fields if f.name != field_name
+            ]
+        else:
+            dataset_doc.sample_fields = [
+                f for f in dataset_doc.sample_fields if f.name != field_name
+            ]
+
         dataset_doc.save()
 
     def _update(self, object_id, update_doc, filtered_fields=None, **kwargs):
@@ -440,7 +738,9 @@ class DatasetMixin(object):
             for d in update_doc.values():
                 for k in d.keys():
                     for ff in filtered_fields:
-                        if k.startswith(ff) and not k.lstrip(ff).count("."):
+                        if k.startswith(ff) and not k[len(ff) :].lstrip(
+                            "."
+                        ).count("."):
                             raise ValueError(
                                 "Modifying root of filtered list field '%s' "
                                 "is not allowed" % k
@@ -493,7 +793,9 @@ class DatasetMixin(object):
         for field_name in filtered_field.split("."):
             el = el[field_name]
 
-        el_fields = list_element_field.lstrip(filtered_field).split(".")
+        el_fields = (
+            list_element_field[len(filtered_field) :].lstrip(".").split(".")
+        )
         idx = int(el_fields.pop(0))
 
         el = el[idx]
@@ -504,9 +806,13 @@ class DatasetMixin(object):
     @classmethod
     def _get_fields_ordered(cls, include_private=False):
         if include_private:
-            return cls._fields_ordered
+            return tuple(f for f in cls._fields_ordered if f != "id")
 
-        return tuple(f for f in cls._fields_ordered if not f.startswith("_"))
+        return tuple(
+            f
+            for f in cls._fields_ordered
+            if f != "id" and not f.startswith("_")
+        )
 
 
 class NoDatasetMixin(object):
@@ -545,12 +851,20 @@ class NoDatasetMixin(object):
     def id(self):
         return None
 
+    def _get_field_names(self, include_private=False):
+        if include_private:
+            return tuple(k for k in self._data.keys() if k != "id")
+
+        return tuple(
+            k for k in self._data.keys() if k != "id" and not k.startswith("_")
+        )
+
     def _get_repr_fields(self):
         return ("id",) + self.field_names
 
     @property
     def field_names(self):
-        return tuple(k for k in self._data.keys() if not k.startswith("_"))
+        return self._get_field_names(include_private=False)
 
     @staticmethod
     def _get_default(field):
@@ -604,8 +918,8 @@ class NoDatasetMixin(object):
             else:
                 msg = "Sample does not have field '%s'." % field_name
                 if value is not None:
-                    # don't report this when clearing a field.
-                    msg += " Use `create=True` to create a new field."
+                    msg += " Use `create=True` to create a new field"
+
                 raise ValueError(msg)
 
         self.__setattr__(field_name, value)
@@ -614,15 +928,17 @@ class NoDatasetMixin(object):
         if field_name in self.default_fields:
             default_value = self._get_default(self.default_fields[field_name])
             self.set_field(field_name, default_value)
-        else:
-            self._data.pop(field_name, None)
+            return
+
+        if field_name not in self._data:
+            raise ValueError("Sample has no field '%s'" % field_name)
+
+        self._data.pop(field_name)
 
     def to_dict(self, extended=False):
         d = {}
         for k, v in self._data.items():
-            if k == "frames" and self.media_type == fomm.VIDEO:
-                d[k] = {str(fk): fv for fk, fv in v.items()}
-            elif hasattr(v, "to_dict"):
+            if hasattr(v, "to_dict"):
                 # Embedded document
                 d[k] = v.to_dict(extended=extended)
             elif isinstance(v, np.ndarray):
@@ -636,6 +952,7 @@ class NoDatasetMixin(object):
             else:
                 # JSON primitive
                 d[k] = v
+
         return d
 
     @classmethod
@@ -686,24 +1003,60 @@ class NoDatasetMixin(object):
         pass
 
 
-def get_implied_field_kwargs(value, **kwargs):
+def validate_fields_match(field_name, field, ref_field):
+    if type(field) is not type(ref_field):
+        raise ValueError(
+            "Field '%s' type %s does not match existing field "
+            "type %s" % (field_name, field, ref_field)
+        )
+
+    if isinstance(field, fof.EmbeddedDocumentField):
+        if not issubclass(field.document_type, ref_field.document_type):
+            raise ValueError(
+                "Embedded document field '%s' type %s does not match existing "
+                "field type %s"
+                % (field_name, field.document_type, ref_field.document_type)
+            )
+
+    if isinstance(field, (fof.ListField, fof.DictField)):
+        if (ref_field.field is not None) and not isinstance(
+            field.field, type(ref_field.field)
+        ):
+            raise ValueError(
+                "%s '%s' type %s does not match existing "
+                "field type %s"
+                % (
+                    field.__class__.__name__,
+                    field_name,
+                    field.field,
+                    ref_field.field,
+                )
+            )
+
+
+def get_field_kwargs(field):
+    ftype = type(field)
+    kwargs = {"ftype": ftype}
+
+    if issubclass(ftype, fof.EmbeddedDocumentField):
+        kwargs["embedded_doc_type"] = field.document_type
+
+    if issubclass(ftype, (fof.ListField, fof.DictField)):
+        kwargs["subfield"] = field.field
+
+    return kwargs
+
+
+def get_implied_field_kwargs(value):
     if isinstance(value, BaseEmbeddedDocument):
         return {
             "ftype": fof.EmbeddedDocumentField,
             "embedded_doc_type": type(value),
         }
 
-    if isinstance(value, bool):
-        return {"ftype": fof.BooleanField}
-
-    if isinstance(value, six.integer_types):
-        return {"ftype": fof.IntField}
-
-    if isinstance(value, numbers.Number):
-        return {"ftype": fof.FloatField}
-
-    if isinstance(value, six.string_types):
-        return {"ftype": fof.StringField}
+    ftype = _get_scalar_field_type(value)
+    if ftype is not None:
+        return {"ftype": ftype}
 
     if isinstance(value, (list, tuple)):
         return {"ftype": fof.ListField}
@@ -720,8 +1073,24 @@ def get_implied_field_kwargs(value, **kwargs):
     raise TypeError("Unsupported field value '%s'" % type(value))
 
 
+def _get_scalar_field_type(value):
+    if isinstance(value, bool):
+        return fof.BooleanField
+
+    if isinstance(value, six.integer_types):
+        return fof.IntField
+
+    if isinstance(value, numbers.Number):
+        return fof.FloatField
+
+    if isinstance(value, six.string_types):
+        return fof.StringField
+
+    return None
+
+
 def _create_field(
-    field_name, ftype, embedded_doc_type=None, subfield=None, kwargs={}
+    field_name, ftype, embedded_doc_type=None, subfield=None, kwargs=None
 ):
     if not issubclass(ftype, fof.Field):
         raise ValueError(
@@ -729,16 +1098,17 @@ def _create_field(
             % (ftype, fof.Field)
         )
 
+    if kwargs is None:
+        kwargs = {}
+
     kwargs["db_field"] = field_name
+    kwargs["null"] = True
 
     if issubclass(ftype, fof.EmbeddedDocumentField):
         kwargs.update({"document_type": embedded_doc_type})
-        kwargs["null"] = True
     elif issubclass(ftype, (fof.ListField, fof.DictField)):
         if subfield is not None:
             kwargs["field"] = subfield
-    else:
-        kwargs["null"] = True
 
     field = ftype(**kwargs)
     field.name = field_name
@@ -750,3 +1120,14 @@ def _rename_field(field, new_field_name):
     field.db_field = new_field_name
     field.name = new_field_name
     return field
+
+
+def _handle_error(error, error_level):
+    if error_level > 1:
+        return
+
+    if error_level == 1:
+        logger.warning(error)
+        return
+
+    raise error

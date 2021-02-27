@@ -9,14 +9,20 @@ FiftyOne
     <table id="social-links-table">
       <th>
         <a target="_blank" href="https://github.com/voxel51/fiftyone">
-          <img alt="GitHub repository" src="_static/images/icons/github-mark.svg" />
+          <img alt="GitHub repository" src="_static/images/icons/github-logo-256px.png">
           &nbsp View on GitHub
         </a>
       </th>
       <th>
         <a target="_blank" href="https://join.slack.com/t/fiftyone-users/shared_invite/zt-gtpmm76o-9AjvzNPBOzevBySKzt02gg">
-          <img alt="Slack community" src="_static/images/icons/slack-mark.svg" />
+          <img alt="Slack community" src="_static/images/icons/slack-logo-256px.png">
           &nbsp Join us on Slack
+        </a>
+      </th>
+      <th>
+        <a target="_blank" href="https://colab.research.google.com/github/voxel51/fiftyone-examples/blob/master/examples/quickstart.ipynb">
+          <img alt="Colab quickstart" src="_static/images/icons/colab-logo-256px.png">
+          &nbsp Try it in Colab
         </a>
       </th>
     </table>
@@ -68,16 +74,28 @@ learning workflows.
 .. Add callout items below this line
 
 .. customcalloutitem::
-    :header: Finding annotation mistakes
-    :description: Annotations mistakes create an artificial ceiling on the performance of your model. However, finding these mistakes by hand is not feasible! Use FiftyOne to automatically identify possible label mistakes in your datasets.
-    :button_text: Check out the label mistakes tutorial
-    :button_link: tutorials/label_mistakes.html
+    :header: Curating datasets
+    :description: Surveys show that machine learning engineers spend over half of their time wrangling data, but it doesn't have to be that way. Use FiftyOne's powerful dataset import and manipulation capabilities to manage your data with ease.
+    :button_text: Learn how to load data into FiftyOne
+    :button_link: user_guide/dataset_creation/index.html
+
+.. customcalloutitem::
+    :header: Evaluating models
+    :description: Aggregate metrics alone don’t give you the full picture of your ML models. In practice, the limiting factor on your model’s performance is often data quality issues that you need to see to address. FiftyOne makes it easy to do just that.
+    :button_text: See how to evaluate models with FiftyOne
+    :button_link: tutorials/evaluate_detections.html
 
 .. customcalloutitem::
     :header: Removing redundant images
     :description: During model training, the best results will be seen when training on unique data. Use FiftyOne to automatically remove duplicate or near-duplicate images from your datasets and curate diverse training datasets from your raw data.
     :button_text: Try the image uniqueness tutorial
     :button_link: tutorials/uniqueness.html
+
+.. customcalloutitem::
+    :header: Finding annotation mistakes
+    :description: Annotations mistakes create an artificial ceiling on the performance of your model. However, finding these mistakes by hand is not feasible! Use FiftyOne to automatically identify possible label mistakes in your datasets.
+    :button_text: Check out the label mistakes tutorial
+    :button_link: tutorials/classification_mistakes.html
 
 .. customcalloutitem::
     :header: Bootstrapping datasets from raw images
@@ -130,7 +148,7 @@ adding custom tags, model predictions and more.
 
     dataset.add_sample(sample)
 
-    view = dataset.match_tag("train").sort_by("custom_field").limit(10)
+    view = dataset.match_tags("train").sort_by("custom_field").limit(10)
 
     for sample in view:
         print(sample)
@@ -186,7 +204,7 @@ measurably better performance of your models.
     The FiftyOne Brain is a separate Python package that is bundled with
     FiftyOne. Although it is closed-source, it is licensed as freeware, and you
     have permission to use it for commercial or non-commercial purposes. See
-    `the license <https://github.com/voxel51/fiftyone/blob/develop/LICENSE-BRAIN>`_
+    `the license <https://github.com/voxel51/fiftyone/blob/develop/package/brain/LICENSE>`_
     for more details.
 
 What's Next?
@@ -216,9 +234,11 @@ or reach out to us at support@voxel51.com.
 
    Overview <self>
    Installation <getting_started/install>
+   Environments <environments/index>
    Tutorials <tutorials/index>
    Recipes <recipes/index>
    User Guide <user_guide/index>
    Release Notes <release-notes>
    CLI Documentation <cli/index>
    API Reference <api/fiftyone>
+   FAQ <faq/index>

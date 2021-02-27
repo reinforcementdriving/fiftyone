@@ -1,7 +1,7 @@
 """
 Dataset exporters.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -806,13 +806,16 @@ class FiftyOneDatasetExporter(GenericSampleDatasetExporter):
 
     Args:
         export_dir: the directory to write the export
+        move_media (False): whether to move (True) or copy (False) the source
+            media into its output destination
         pretty_print (False): whether to render the JSON in human readable
             format with newlines and indentations
     """
 
-    def __init__(self, export_dir, pretty_print=False):
+    def __init__(self, export_dir, move_media=False, pretty_print=False):
         export_dir = os.path.abspath(os.path.expanduser(export_dir))
         super().__init__(export_dir)
+        self.move_media = move_media
         self.pretty_print = pretty_print
         self._data_dir = None
         self._frame_labels_dir = None
@@ -851,7 +854,10 @@ class FiftyOneDatasetExporter(GenericSampleDatasetExporter):
 
     def export_sample(self, sample):
         out_filepath = self._filename_maker.get_output_path(sample.filepath)
-        etau.copy_file(sample.filepath, out_filepath)
+        if self.move_media:
+            etau.move_file(sample.filepath, out_filepath)
+        else:
+            etau.copy_file(sample.filepath, out_filepath)
 
         sd = sample.to_dict()
         sd["filepath"] = os.path.relpath(out_filepath, self.export_dir)
@@ -874,11 +880,7 @@ class FiftyOneDatasetExporter(GenericSampleDatasetExporter):
         )
 
     def _export_frame_labels(self, sample, uuid):
-        frames = {}
-        for frame_number, frame in sample.frames.items():
-            frames[str(frame_number)] = frame.to_dict()
-
-        frames_dict = {"frames": frames}
+        frames_dict = {"frames": sample.frames._to_frames_dict()}
         outpath = os.path.join(self._frame_labels_dir, uuid + ".json")
         etas.write_json(frames_dict, outpath, pretty_print=self.pretty_print)
 
@@ -1267,7 +1269,7 @@ class FiftyOneImageDetectionDatasetExporter(LabeledImageDatasetExporter):
 
 class FiftyOneImageLabelsDatasetExporter(LabeledImageDatasetExporter):
     """Exporter that writes a labeled image dataset to disk with labels stored
-    in `ETA ImageLabels format <https://voxel51.com/docs/api/#types-imagelabels>`_.
+    in `ETA ImageLabels format <https://github.com/voxel51/eta/blob/develop/docs/image_labels_guide.md>`_.
 
     See :class:`fiftyone.types.dataset_types.FiftyOneImageLabelsDataset` for
     format details.
@@ -1369,7 +1371,7 @@ class FiftyOneImageLabelsDatasetExporter(LabeledImageDatasetExporter):
 
 class FiftyOneVideoLabelsDatasetExporter(LabeledVideoDatasetExporter):
     """Exporter that writes a labeled video dataset with labels stored in
-    `ETA VideoLabels format <https://voxel51.com/docs/api/#types-videolabels>`_.
+    `ETA VideoLabels format <https://github.com/voxel51/eta/blob/develop/docs/video_labels_guide.md>`_.
 
     See :class:`fiftyone.types.dataset_types.FiftyOneVideoLabelsDataset` for
     format details.

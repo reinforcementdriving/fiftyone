@@ -1,7 +1,7 @@
 """
-FiftyOne view related unit tests.
+FiftyOne view-related unit tests.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -48,6 +48,7 @@ class DatasetViewTests(unittest.TestCase):
         # tags
         for sample in view.match({"tags": "train"}):
             self.assertIn("train", sample.tags)
+
         for sample in view.match({"tags": "test"}):
             self.assertIn("test", sample.tags)
 
@@ -94,7 +95,7 @@ class DatasetViewTests(unittest.TestCase):
         view = (
             dataset.view()
             .exclude_fields(["another_field"])
-            .filter_detections("test_dets", F("confidence") > 0.5)
+            .filter_labels("test_dets", F("confidence") > 0.5)
         )
 
         # modify element
@@ -111,6 +112,7 @@ class DatasetViewTests(unittest.TestCase):
         sample_view.test_dets.detections[0].label = "COMPLEX"
         sample_view.test_dets.detections[1].confidence = 0.51
         sample_view.save()
+
         # check that correct elements are modified
         detections = dataset[sample_view.id].test_dets.detections
         self.assertEqual(detections[0].label, "COMPLEX")
@@ -158,19 +160,120 @@ class DatasetViewTests(unittest.TestCase):
 
 
 class ViewFieldTests(unittest.TestCase):
-    def test_field_names(self):
-        self.assertEqual(
-            F.ground_truth.to_mongo(), F("ground_truth").to_mongo()
+    @drop_datasets
+    @unittest.skip("TODO: Fix workflow errors. Must be run manually")
+    def test_clone_fields(self):
+        dataset = fo.Dataset()
+        sample1 = fo.Sample(
+            filepath="image1.jpg",
+            predictions=fo.Classification(label="friend", field=1),
         )
-        self.assertEqual(
-            F.ground_truth.label.to_mongo(), F("ground_truth.label").to_mongo()
+        sample2 = fo.Sample(
+            filepath="image2.jpg",
+            predictions=fo.Classification(label="enemy", field=2),
         )
-        self.assertEqual(
-            F.ground_truth.label.to_mongo(), F("ground_truth.label").to_mongo()
+        dataset.add_samples([sample1, sample2])
+
+        dataset[1:].clone_sample_field(
+            "predictions.field", "predictions.new_field"
         )
-        self.assertEqual(
-            F.ground_truth.label.to_mongo(), F("ground_truth").label.to_mongo()
+        self.assertIsNotNone(sample2.predictions.new_field)
+        with self.assertRaises(AttributeError):
+            sample1.predictions.new_field
+
+        dataset[:1].clear_sample_field("predictions.field")
+        self.assertIsNone(sample1.predictions.field)
+        self.assertIsNotNone(sample2.predictions.field)
+
+    @drop_datasets
+    @unittest.skip("TODO: Fix workflow errors. Must be run manually")
+    def test_clone_fields_array(self):
+        dataset = fo.Dataset()
+        sample1 = fo.Sample(
+            filepath="image1.jpg",
+            predictions=fo.Detections(
+                detections=[
+                    fo.Detection(label="high", confidence=0.9, field=1),
+                    fo.Detection(label="high", confidence=0.6, field=2),
+                    fo.Detection(label="low", confidence=0.3, field=3),
+                    fo.Detection(label="low", confidence=0.1, field=4),
+                ]
+            ),
         )
+        sample2 = fo.Sample(
+            filepath="image2.jpg",
+            predictions=fo.Detections(
+                detections=[
+                    fo.Detection(label="high", confidence=1.0, field=1),
+                    fo.Detection(label="high", confidence=0.8, field=2),
+                    fo.Detection(label="low", confidence=0.2, field=3),
+                ]
+            ),
+        )
+        dataset.add_samples([sample1, sample2])
+
+        dataset[:1].clear_sample_field("predictions.detections.field")
+        self.assertIsNone(sample1.predictions.detections[0].field)
+        self.assertIsNotNone(sample2.predictions.detections[0].field)
+
+        dataset[1:].clone_sample_field(
+            "predictions.detections.field", "predictions.detections.new_field"
+        )
+        self.assertIsNotNone(sample2.predictions.detections[0].new_field)
+        with self.assertRaises(AttributeError):
+            sample1.predictions.detections[0].new_field
+
+        dataset.delete_sample_field("predictions.detections.field")
+        dataset.delete_sample_field("predictions.detections.new_field")
+        with self.assertRaises(AttributeError):
+            sample1.predictions.detections[0].field
+
+        low_conf_view = dataset.filter_labels(
+            "predictions", F("confidence") < 0.5
+        )
+        low_conf_view.clone_sample_field("predictions", "low_conf")
+        high_conf_view = dataset.filter_labels(
+            "predictions", F("confidence") > 0.5
+        )
+        high_conf_view.clone_sample_field("predictions", "high_conf")
+        schema = dataset.get_field_schema()
+        self.assertIn("low_conf", schema)
+        self.assertIn("high_conf", schema)
+        self.assertTrue(sample1.has_field("low_conf"))
+        self.assertTrue(sample1.has_field("high_conf"))
+        self.assertEqual(len(sample1["low_conf"].detections), 2)
+        self.assertEqual(len(sample1["high_conf"].detections), 2)
+
+        dataset2 = (
+            high_conf_view.exclude_fields(["low_conf", "high_conf"])
+            .limit(1)
+            .clone()
+        )
+        sample21 = dataset2.first()
+        schema2 = dataset2.get_field_schema()
+        self.assertTrue(len(dataset2), 1)
+        self.assertNotIn("low_conf", schema2)
+        self.assertNotIn("high_conf", schema2)
+        self.assertFalse(sample21.has_field("low_conf"))
+        self.assertFalse(sample21.has_field("high_conf"))
+        self.assertEqual(len(sample21["predictions"].detections), 2)
+
+        dataset[1:].clear_sample_field("low_conf")
+        dataset[1:].clear_sample_field("high_conf")
+        self.assertIsNotNone(sample1["low_conf"])
+        self.assertIsNotNone(sample1["high_conf"])
+        self.assertIsNone(sample2["low_conf"])
+        self.assertIsNone(sample2["high_conf"])
+
+        save_view = high_conf_view.exclude_fields(
+            ["low_conf", "high_conf"]
+        ).limit(1)
+        save_view.save()
+        schema = dataset.get_field_schema()
+        self.assertTrue(len(dataset), 1)
+        self.assertNotIn("low_conf", schema)
+        self.assertNotIn("high_conf", schema)
+        self.assertEqual(len(sample1["predictions"].detections), 2)
 
 
 class ViewExpressionTests(unittest.TestCase):
@@ -489,7 +592,7 @@ class AggregationTests(unittest.TestCase):
         ]
 
         for ds in dataset, dataset.view():
-            for d in ds.aggregate(pipeline):
+            for d in ds._aggregate(pipeline):
                 tag = d["_id"]
                 count = d["count"]
                 self.assertEqual(count, counts[tag])
@@ -529,47 +632,17 @@ class ViewStageTests(unittest.TestCase):
         self.dataset.add_sample(self.sample1)
         self.dataset.add_sample(self.sample2)
 
-    def test_exclude(self):
-        result = list(self.dataset.exclude([self.sample1.id]))
-        self.assertIs(len(result), 1)
-        self.assertEqual(result[0].id, self.sample2.id)
-
-    def test_exclude_fields(self):
-        self.dataset.add_sample_field("exclude_fields_field1", fo.IntField)
-        self.dataset.add_sample_field("exclude_fields_field2", fo.IntField)
-
-        for sample in self.dataset.exclude_fields(["exclude_fields_field1"]):
-            self.assertIsNone(sample.selected_field_names)
-            self.assertSetEqual(
-                sample.excluded_field_names, {"exclude_fields_field1"}
-            )
-            with self.assertRaises(AttributeError):
-                sample.exclude_fields_field1
-
-            self.assertIsNone(sample.exclude_fields_field2)
-
-    def test_exists(self):
-        self.sample1["exists"] = True
+    def _setUp_classification(self):
+        self.sample1["test_clf"] = fo.Classification(
+            label="friend", confidence=0.9
+        )
         self.sample1.save()
-        result = list(self.dataset.exists("exists"))
-        self.assertIs(len(result), 1)
-        self.assertEqual(result[0].id, self.sample1.id)
-
-    def test_filter_field(self):
-        self.sample1["test_class"] = fo.Classification(label="friend")
-        self.sample1.save()
-
-        self.sample2["test_class"] = fo.Classification(label="enemy")
+        self.sample2["test_clf"] = fo.Classification(
+            label="enemy", confidence=0.99
+        )
         self.sample2.save()
 
-        view = self.dataset.filter_field("test_class", F("label") == "friend")
-
-        self.assertEqual(len(view.exists("test_class")), 1)
-        for sample in view:
-            if sample.test_class is not None:
-                self.assertEqual(sample.test_class.label, "friend")
-
-    def test_filter_classifications(self):
+    def _setUp_classifications(self):
         self.sample1["test_clfs"] = fo.Classifications(
             classifications=[
                 fo.Classification(label="friend", confidence=0.9),
@@ -588,16 +661,17 @@ class ViewStageTests(unittest.TestCase):
         )
         self.sample2.save()
 
-        view = self.dataset.filter_classifications(
-            "test_clfs", (F("confidence") > 0.5) & (F("label") == "friend")
+    def _setUp_detection(self):
+        self.sample1["test_det"] = fo.Detection(
+            label="friend", confidence=0.9, bounding_box=[0, 0, 0.5, 0.5],
         )
+        self.sample1.save()
+        self.sample2["test_det"] = fo.Detection(
+            label="hex", confidence=0.8, bounding_box=[0.35, 0, 0.2, 0.25],
+        )
+        self.sample2.save()
 
-        for sample in view:
-            for clf in sample.test_clfs.classifications:
-                self.assertGreater(clf.confidence, 0.5)
-                self.assertEqual(clf.label, "friend")
-
-    def test_filter_detections(self):
+    def _setUp_detections(self):
         self.sample1["test_dets"] = fo.Detections(
             detections=[
                 fo.Detection(
@@ -642,7 +716,71 @@ class ViewStageTests(unittest.TestCase):
         )
         self.sample2.save()
 
-        view = self.dataset.filter_detections(
+    def _setUp_numeric(self):
+        self.sample1["numeric_field"] = 1.0
+        self.sample1["numeric_list_field"] = [-1, 0, 1]
+        self.sample1.save()
+        self.sample2["numeric_field"] = -1.0
+        self.sample2["numeric_list_field"] = [-2, -1, 0, 1]
+        self.sample2.save()
+
+    def test_exclude(self):
+        result = list(self.dataset.exclude([self.sample1.id]))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample2.id)
+
+    def test_exclude_fields(self):
+        self.dataset.add_sample_field("exclude_fields_field1", fo.IntField)
+        self.dataset.add_sample_field("exclude_fields_field2", fo.IntField)
+
+        for sample in self.dataset.exclude_fields(["exclude_fields_field1"]):
+            self.assertIsNone(sample.selected_field_names)
+            self.assertSetEqual(
+                sample.excluded_field_names, {"exclude_fields_field1"}
+            )
+            with self.assertRaises(AttributeError):
+                sample.exclude_fields_field1
+
+            self.assertIsNone(sample.exclude_fields_field2)
+
+    def test_exists(self):
+        self.sample1["exists"] = True
+        self.sample1.save()
+        result = list(self.dataset.exists("exists"))
+        self.assertIs(len(result), 1)
+        self.assertEqual(result[0].id, self.sample1.id)
+
+    def test_filter_field(self):
+        self.sample1["test_class"] = fo.Classification(label="friend")
+        self.sample1.save()
+
+        self.sample2["test_class"] = fo.Classification(label="enemy")
+        self.sample2.save()
+
+        view = self.dataset.filter_field("test_class", F("label") == "friend")
+
+        self.assertEqual(len(view.exists("test_class")), 1)
+        for sample in view:
+            if sample.test_class is not None:
+                self.assertEqual(sample.test_class.label, "friend")
+
+    def test_filter_labels(self):
+        # Classifications
+        self._setUp_classifications()
+
+        view = self.dataset.filter_labels(
+            "test_clfs", (F("confidence") > 0.5) & (F("label") == "friend")
+        )
+
+        for sample in view:
+            for clf in sample.test_clfs.classifications:
+                self.assertGreater(clf.confidence, 0.5)
+                self.assertEqual(clf.label, "friend")
+
+        # Detections
+        self._setUp_detections()
+
+        view = self.dataset.filter_labels(
             "test_dets", (F("confidence") > 0.5) & (F("label") == "friend")
         )
 
@@ -655,17 +793,128 @@ class ViewStageTests(unittest.TestCase):
         result = list(self.dataset.limit(1))
         self.assertIs(len(result), 1)
 
+    def test_limit_labels(self):
+        self._setUp_classifications()
+
+        result = list(self.dataset.limit_labels("test_clfs", 1))
+        self.assertIs(len(result[0]["test_clfs"].classifications), 1)
+
+    def test_map_labels(self):
+        self._setUp_classification()
+        self._setUp_detection()
+        mapping = {"friend": "enemy", "hex": "curse", "enemy": "friend"}
+        view = self.dataset.map_labels("test_clf", mapping).map_labels(
+            "test_det", mapping
+        )
+        it = zip(view, self.dataset)
+        for sv, s in it:
+            self.assertEqual(sv.test_clf.label, mapping[s.test_clf.label])
+            self.assertEqual(sv.test_det.label, mapping[s.test_det.label])
+
+        self._setUp_classifications()
+        self._setUp_detections()
+        view = self.dataset.map_labels("test_clfs", mapping).map_labels(
+            "test_dets", mapping
+        )
+        it = zip(view, self.dataset)
+        for sv, s in it:
+            clfs = zip(
+                sv.test_clfs.classifications, s.test_clfs.classifications
+            )
+            dets = zip(sv.test_dets.detections, s.test_dets.detections)
+            for f in (clfs, dets):
+                for lv, l in f:
+                    if l.label in mapping:
+                        self.assertEqual(lv.label, mapping[l.label])
+                    else:
+                        self.assertEqual(lv.label, l.label)
+
+    def test_set_field1(self):
+        self._setUp_numeric()
+
+        # Clip all negative values of `numeric_field` to zero
+        view = self.dataset.set_field(
+            "numeric_field", F("numeric_field").max(0)
+        )
+        it = zip(view, self.dataset)
+        for sv, s in it:
+            if s.numeric_field < 0:
+                self.assertTrue(sv.numeric_field == 0)
+            else:
+                self.assertTrue(sv.numeric_field >= 0)
+
+        # Replace all negative values of `numeric_field` with `None`
+        view = self.dataset.set_field(
+            "numeric_field",
+            (F("numeric_field") >= 0).if_else(F("numeric_field"), None),
+        )
+        it = zip(view, self.dataset)
+        for sv, s in it:
+            if s.numeric_field < 0:
+                self.assertIsNone(sv.numeric_field)
+            else:
+                self.assertIsNotNone(sv.numeric_field)
+
+        # Clip all negative values of `numeric_list_field` to zero
+        view = self.dataset.set_field(
+            "numeric_list_field", F("numeric_list_field").map(F().max(0))
+        )
+        it = zip(view, self.dataset)
+        for sv, s in it:
+            for fv, f in zip(sv.numeric_list_field, s.numeric_list_field):
+                if f < 0:
+                    self.assertTrue(fv == 0)
+                else:
+                    self.assertTrue(fv >= 0)
+
+    def test_set_field2(self):
+        self._setUp_detections()
+
+        # Set a new embedded list field
+        view = self.dataset.set_field(
+            "test_dets.detections.is_best_friend",
+            (F("confidence") > 0.5) & (F("label") == "friend"),
+        )
+
+        for sample in view:
+            for det in sample.test_dets.detections:
+                is_best_friend = det.confidence > 0.5 and det.label == "friend"
+                self.assertEqual(det.is_best_friend, is_best_friend)
+
+        # Set an embedded field
+        view = self.dataset.set_field(
+            "test_dets.num_predictions", F("detections").length()
+        )
+
+        for sample in view:
+            self.assertEqual(
+                sample.test_dets.num_predictions,
+                len(sample.test_dets.detections),
+            )
+
+        # Validate that terminal list fields are not automatically unrolled
+        view = self.dataset.set_field(
+            "test_dets.detections",
+            F("detections").filter(F("confidence") > 0.5),
+        )
+
+        for sample in view:
+            for det in sample.test_dets.detections:
+                self.assertGreater(det.confidence, 0.5)
+
+        # Validate that terminal list fields can be unrolled if desired
+        # Sets all bounding box coordinates to 0
+        view = self.dataset.set_field("test_dets.detections.bounding_box[]", 0)
+
+        for sample in view:
+            for det in sample.test_dets.detections:
+                for coord in det.bounding_box:
+                    self.assertEqual(coord, 0)
+
     def test_match(self):
         self.sample1["value"] = "value"
         self.sample1.save()
         result = list(self.dataset.match({"value": "value"}))
-        self.assertIs(len(result), 1)
-        self.assertEqual(result[0].id, self.sample1.id)
-
-    def test_match_tag(self):
-        self.sample1.tags.append("test")
-        self.sample1.save()
-        result = list(self.dataset.match_tag("test"))
         self.assertIs(len(result), 1)
         self.assertEqual(result[0].id, self.sample1.id)
 
@@ -706,7 +955,11 @@ class ViewStageTests(unittest.TestCase):
         for sample in self.dataset.select_fields():
             self.assertSetEqual(
                 sample.selected_field_names,
-                set(default_sample_fields(DatasetSampleDocument)),
+                set(
+                    default_sample_fields(
+                        DatasetSampleDocument, include_private=True
+                    )
+                ),
             )
             self.assertIsNone(sample.excluded_field_names)
             sample.filepath
@@ -727,6 +980,13 @@ class ViewStageTests(unittest.TestCase):
         result = list(self.dataset.sort_by("filepath", reverse=True))
         self.assertIs(len(result), 2)
         self.assertEqual(result[0].id, self.sample2.id)
+
+    def test_sort_by_embedded(self):
+        self._setUp_classification()
+
+        result = list(self.dataset.sort_by("test_clf.label"))
+        self.assertEqual(result[0]["test_clf"].label, "enemy")
+        self.assertEqual(result[1]["test_clf"].label, "friend")
 
     def test_take(self):
         result = list(self.dataset.take(1))

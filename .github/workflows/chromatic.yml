@@ -9,19 +9,18 @@ on:
     tags:
       - v*
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize]
     branches:
       - develop
       - rel-*
       - release-*
     paths:
-      - electron/**
+      - app/**
       - .github/workflows/chromatic.yml
 
 jobs:
   chromatic:
-    runs-on: ubuntu-18.04
-    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-20.04
     steps:
       - name: Clone fiftyone
         uses: actions/checkout@v1
@@ -31,10 +30,15 @@ jobs:
         uses: actions/cache@v2
         with:
           key: electron-cache
-          path: electron/node_modules
+          path: app/node_modules
       - name: Install dependencies
-        working-directory: electron
+        working-directory: app
         run: yarn
       - name: Publish storybook
-        working-directory: electron
+        working-directory: app
         run: yarn chromatic --project-token=${{ secrets.CHROMATIC_PROJECT_TOKEN }}
+      - uses: actions/upload-artifact@v2
+        if: success() || failure()
+        with:
+          name: build-storybook-log
+          path: app/build-storybook.log

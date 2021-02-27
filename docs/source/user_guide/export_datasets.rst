@@ -1,3 +1,5 @@
+.. _exporting-datasets:
+
 Exporting FiftyOne Datasets
 ===========================
 
@@ -138,17 +140,17 @@ format when writing the dataset to disk.
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`FiftyOneImageLabelsDataset                                   | A labeled dataset consisting of images and their associated multitask predictions  |
     | <FiftyOneImageLabelsDataset-export>`                               | stored in `ETA ImageLabels format \                                                |
-    |                                                                    | <https://voxel51.com/docs/api/#types-imagelabels>`_.                               |
+    |                                                                    | <https://github.com/voxel51/eta/blob/develop/docs/image_labels_guide.md>`_.        |
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`FiftyOneVideoLabelsDataset                                   | A labeled dataset consisting of videos and their associated multitask predictions  |
     | <FiftyOneVideoLabelsDataset-export>`                               | stored in `ETA VideoLabels format \                                                |
-    |                                                                    | <https://voxel51.com/docs/api/#types-videolabels>`_.                               |
+    |                                                                    | <https://github.com/voxel51/eta/blob/develop/docs/video_labels_guide.md>`_.        |
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`BDDDataset <BDDDataset-export>`                              | A labeled dataset consisting of images and their associated multitask predictions  |
     |                                                                    | saved in `Berkeley DeepDrive (BDD) format <https://bdd-data.berkeley.edu>`_.       |
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
-    | :ref:`FiftyOneDataset <FiftyOneDataset-export>`                    | A dataset consisting of an arbitrary serialized |WhatIsAFiftyOneDataset| and its   |
-    |                                                                    | associated source data.                                                            |
+    | :ref:`FiftyOneDataset <FiftyOneDataset-export>`                    | A dataset consisting of an arbitrary serialized |Dataset| and its associated       |
+    |                                                                    | source data.                                                                       |
     +--------------------------------------------------------------------+------------------------------------------------------------------------------------+
     | :ref:`Custom formats <custom-dataset-exporter>`                    | Export datasets in custom formats by defining your own |DatasetType| or            |
     |                                                                    | |DatasetExporter| class.                                                           |
@@ -1428,7 +1430,7 @@ FiftyOneImageLabelsDataset
 The :class:`fiftyone.types.FiftyOneImageLabelsDataset <fiftyone.types.dataset_types.FiftyOneImageLabelsDataset>`
 type represents a labeled dataset consisting of images and their associated
 multitask predictions stored in
-`ETA ImageLabels format <https://voxel51.com/docs/api/#types-imagelabels>`_.
+`ETA ImageLabels format <https://github.com/voxel51/eta/blob/develop/docs/image_labels_guide.md>`_.
 
 Datasets of this type are exported in the following format:
 
@@ -1466,7 +1468,7 @@ where `manifest.json` is a JSON file in the following format:
     }
 
 and where each labels JSON file is stored in
-`ETA ImageLabels format <https://voxel51.com/docs/api/#types-imagelabels>`_.
+`ETA ImageLabels format <https://github.com/voxel51/eta/blob/develop/docs/image_labels_guide.md>`_.
 
 For unlabeled images, an empty `eta.core.image.ImageLabels` file is stored.
 
@@ -1517,7 +1519,7 @@ FiftyOneVideoLabelsDataset
 The :class:`fiftyone.types.FiftyOneVideoLabelsDataset <fiftyone.types.dataset_types.FiftyOneVideoLabelsDataset>`
 type represents a labeled dataset consisting of videos and their associated
 labels stored in
-`ETA VideoLabels format <https://voxel51.com/docs/api/#types-videolabels>`_.
+`ETA VideoLabels format <https://github.com/voxel51/eta/blob/develop/docs/video_labels_guide.md>`_.
 
 Datasets of this type are exported in the following format:
 
@@ -1555,7 +1557,7 @@ where `manifest.json` is a JSON file in the following format:
     }
 
 and where each labels JSON file is stored in
-`ETA VideoLabels format <https://voxel51.com/docs/api/#types-videolabels>`_.
+`ETA VideoLabels format <https://github.com/voxel51/eta/blob/develop/docs/video_labels_guide.md>`_.
 
 For unlabeled videos, an empty `eta.core.video.VideoLabels` file is stored.
 

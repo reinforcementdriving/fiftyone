@@ -1,7 +1,7 @@
 """
 Tests for the :mod:`fiftyone.utils.torch` module.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -77,9 +77,7 @@ def test_torch_image_patches_dataset():
         image_paths, detections, transform
     )
 
-    data_loader = torch.utils.data.DataLoader(
-        torch_dataset, batch_size=1, num_workers=4
-    )
+    data_loader = torch.utils.data.DataLoader(torch_dataset, batch_size=1)
 
     patches = next(iter(data_loader))
     patches = torch.squeeze(patches, dim=0)

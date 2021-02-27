@@ -1,7 +1,7 @@
 """
 Core utilities.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -9,12 +9,15 @@ import atexit
 from base64 import b64encode, b64decode
 from collections import defaultdict
 from contextlib import contextmanager
+from copy import deepcopy
 import importlib
+import inspect
 import io
 import itertools
 import logging
 import os
 import signal
+import subprocess
 import types
 import zlib
 
@@ -31,9 +34,11 @@ import numpy as np
 import packaging.version
 import xmltodict
 
+import eta
 import eta.core.utils as etau
 
 import fiftyone as fo
+import fiftyone.core.context as foc
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +72,33 @@ def pformat(obj, indent=4, width=80, depth=None):
         the pretty-formatted string
     """
     return _pprint.pformat(obj, indent=indent, width=width, depth=depth)
+
+
+def stream_objects(objects):
+    """Streams the iterable of objects to stdout via ``less``.
+
+    The output can be interactively traversed via scrolling and can be
+    terminated via keyboard interrupt.
+
+    Args:
+        objects: an iterable of objects that can be printed via ``str(obj)``
+    """
+    # @todo support Windows and other environments without `less`
+    # Look at pydoc.pager() for inspiration?
+    p = subprocess.Popen(
+        ["less", "-F", "-R", "-S", "-X", "-K"],
+        shell=True,
+        stdin=subprocess.PIPE,
+    )
+
+    try:
+        with io.TextIOWrapper(p.stdin, errors="backslashreplace") as pipe:
+            for obj in objects:
+                pipe.write(str(obj) + "\n")
+
+        p.wait()
+    except (KeyboardInterrupt, OSError):
+        pass
 
 
 def indent_lines(s, indent=4, skip=0):
@@ -106,8 +138,33 @@ def indent_lines(s, indent=4, skip=0):
     return s
 
 
+def available_patterns():
+    """Returns the available patterns that can be used by
+    :meth:`fill_patterns`.
+
+    Returns:
+        a dict mapping patterns to their replacements
+    """
+    return deepcopy(eta.config.patterns)
+
+
+def fill_patterns(string):
+    """Fills the patterns in in the given string.
+
+    Use :meth:`available_patterns` to see the available patterns that can be
+    used.
+
+    Args:
+        string: a string
+
+    Returns:
+        a copy of string with any patterns replaced
+    """
+    return etau.fill_patterns(string, available_patterns())
+
+
 def ensure_tf(error_msg=None):
-    """Verifies that TensorFlow is installed on the host machine.
+    """Verifies that TensorFlow is installed and importable.
 
     Args:
         error_msg (None): an optional custom error message to print
@@ -115,12 +172,12 @@ def ensure_tf(error_msg=None):
     Raises:
         ImportError: if ``tensorflow`` could not be imported
     """
-    _ensure_package("tensorflow", error_msg=error_msg)
+    _ensure_import("tensorflow", error_msg=error_msg)
 
 
 def ensure_tfds(error_msg=None):
-    """Verifies that the ``tensorflow_datasets`` package is installed on the
-    host machine.
+    """Verifies that the ``tensorflow_datasets`` package is installed and
+    importable.
 
     Args:
         error_msg (None): an optional custom error message to print
@@ -128,12 +185,12 @@ def ensure_tfds(error_msg=None):
     Raises:
         ImportError: if ``tensorflow_datasets`` could not be imported
     """
-    _ensure_package("tensorflow", min_version="1.15", error_msg=error_msg)
-    _ensure_package("tensorflow_datasets", error_msg=error_msg)
+    _ensure_import("tensorflow", min_version="1.15", error_msg=error_msg)
+    _ensure_import("tensorflow_datasets", error_msg=error_msg)
 
 
 def ensure_torch(error_msg=None):
-    """Verifies that PyTorch is installed on the host machine.
+    """Verifies that PyTorch is installed and importable.
 
     Args:
         error_msg (None): an optional custom error message to print
@@ -141,12 +198,12 @@ def ensure_torch(error_msg=None):
     Raises:
         ImportError: if ``torch`` or ``torchvision`` could not be imported
     """
-    _ensure_package("torch", error_msg=error_msg)
-    _ensure_package("torchvision", error_msg=error_msg)
+    _ensure_import("torch", error_msg=error_msg)
+    _ensure_import("torchvision", error_msg=error_msg)
 
 
 def ensure_pycocotools(error_msg=None):
-    """Verifies that pycocotools is installed on the host machine.
+    """Verifies that pycocotools is installed and importable.
 
     Args:
         error_msg (None): an optional custom error message to print
@@ -154,40 +211,41 @@ def ensure_pycocotools(error_msg=None):
     Raises:
         ImportError: if ``pycocotools`` could not be imported
     """
-    _ensure_package("pycocotools", error_msg=error_msg)
+    _ensure_import("pycocotools", error_msg=error_msg)
 
 
-def _ensure_package(package_name, min_version=None, error_msg=None):
+def _ensure_import(module_name, min_version=None, error_msg=None):
     has_min_ver = min_version is not None
 
     if has_min_ver:
         min_version = packaging.version.parse(min_version)
 
     try:
-        pkg = importlib.import_module(package_name)
+        mod = importlib.import_module(module_name)
     except ImportError as e:
         if has_min_ver:
-            pkg_str = "%s>=%s" % (package_name, min_version)
+            module_str = "%s>=%s" % (module_name, min_version)
         else:
-            pkg_str = package_name
+            module_str = module_name
 
         if error_msg is not None:
             raise ImportError(error_msg) from e
 
         raise ImportError(
             "The requested operation requires that '%s' is installed on your "
-            "machine" % pkg_str,
-            name=package_name,
+            "machine" % module_str,
+            name=module_name,
         ) from e
 
     if has_min_ver:
-        pkg_version = packaging.version.parse(pkg.__version__)
-        if pkg_version < min_version:
+        # @todo not all modules have `__version__`
+        mod_version = packaging.version.parse(mod.__version__)
+        if mod_version < min_version:
             raise ImportError(
                 "The requested operation requires that '%s>=%s' is installed "
                 "on your machine; found '%s==%s'"
-                % (package_name, min_version, package_name, pkg_version),
-                name=package_name,
+                % (module_name, min_version, module_name, mod_version),
+                name=module_name,
             )
 
 
@@ -297,9 +355,47 @@ def parse_serializable(obj, cls):
     )
 
 
+def set_resource_limit(limit, soft=None, hard=None, warn_on_failure=False):
+    """Uses the ``resource`` package to change a resource limit for the current
+    process.
+
+    If the ``resource`` package cannot be imported, this command does nothing.
+
+    Args:
+        limit: the name of the resource to limit. Must be the name of a
+            constant in the ``resource`` module starting with ``RLIMIT``. See
+            the documentation of the ``resource`` module for supported values
+        soft (None): a new soft limit to apply, which cannot exceed the hard
+            limit. If omitted, the current soft limit is maintained
+        hard (None): a new hard limit to apply. If omitted, the current hard
+            limit is maintained
+        warn_on_failure (False): whether to issue a warning rather than an
+            error if the resource limit change is not successful
+    """
+    try:
+        import resource
+    except ImportError as e:
+        if warn_on_failure:
+            logger.warning(e)
+        else:
+            return
+
+    try:
+        _limit = getattr(resource, limit)
+        soft_orig, hard_orig = resource.getrlimit(_limit)
+        soft = soft or soft_orig
+        hard = hard or hard_orig
+        resource.setrlimit(_limit, (soft, hard))
+    except ValueError as e:
+        if warn_on_failure:
+            logger.warning(e)
+        else:
+            raise
+
+
 class ResourceLimit(object):
     """Context manager that allows for a temporary change to a resource limit
-    exposed by the `resource` package.
+    exposed by the ``resource`` package.
 
     Example::
 
@@ -308,32 +404,29 @@ class ResourceLimit(object):
         with ResourceLimit(resource.RLIMIT_NOFILE, soft=4096):
             # temporarily do things with up to 4096 open files
 
-    Args:
+     Args:
         limit: the name of the resource to limit. Must be the name of a
-            constant in the `resource` module starting with `RLIMIT`. See the
-            documentation of the `resource` module for supported values
-        soft: a new soft limit to apply, which cannot exceed the hard limit
-        hard: a new hard limit to apply, which cannot exceed the current
-            hard limit
-        warn_on_failure: whether to issue a warning rather than an error
-            if the resource limit change is not successful
+            constant in the ``resource`` module starting with ``RLIMIT``. See
+            the documentation of the ``resource`` module for supported values
+        soft (None): a new soft limit to apply, which cannot exceed the hard
+            limit. If omitted, the current soft limit is maintained
+        hard (None): a new hard limit to apply. If omitted, the current hard
+            limit is maintained
+        warn_on_failure (False): whether to issue a warning rather than an
+            error if the resource limit change is not successful
     """
 
-    def __init__(
-        self, limit_name, soft=None, hard=None, warn_on_failure=False
-    ):
-        if not limit_name.startswith("RLIMIT_"):
-            raise ValueError("Invalid limit name: %r")
-
-        self._supported_platform = False
+    def __init__(self, limit, soft=None, hard=None, warn_on_failure=False):
         try:
             import resource
 
             self._supported_platform = True
-        except ImportError:
-            return
+        except ImportError as e:
+            self._supported_platform = False
+            if warn_on_failure:
+                logger.warning(e)
 
-        self._limit = getattr(resource, limit_name)
+        self._limit = limit
         self._soft = soft
         self._hard = hard
         self._soft_orig = None
@@ -346,37 +439,44 @@ class ResourceLimit(object):
 
         import resource
 
-        self._soft_orig, self._hard_orig = resource.getrlimit(self._limit)
-        soft = self._soft or self._soft_orig
-        hard = self._hard or self._hard_orig
-        self._set_resource_limit(soft, hard)
+        limit = getattr(resource, self._limit)
+        self._soft_orig, self._hard_orig = resource.getrlimit(limit)
+
+        set_resource_limit(
+            self._limit,
+            soft=(self._soft or self._soft_orig),
+            hard=(self._hard or self._hard_orig),
+            warn_on_failure=self._warn_on_failure,
+        )
+
         return self
 
     def __exit__(self, *args):
         if not self._supported_platform:
             return
 
-        self._set_resource_limit(self._soft_orig, self._hard_orig)
-
-    def _set_resource_limit(self, soft, hard):
-        if not self._supported_platform:
-            return
-
-        import resource
-
-        try:
-            resource.setrlimit(self._limit, (soft, hard))
-        except ValueError as e:
-            if self._warn_on_failure:
-                logger.warning(e)
-            else:
-                raise
+        set_resource_limit(
+            self._limit,
+            soft=self._soft_orig,
+            hard=self._hard_orig,
+            warn_on_failure=self._warn_on_failure,
+        )
 
 
 class ProgressBar(etau.ProgressBar):
     def __init__(self, *args, **kwargs):
-        quiet = not fo.config.show_progress_bars
-        super().__init__(*args, iters_str="samples", quiet=quiet, **kwargs)
+        if "quiet" not in kwargs:
+            kwargs["quiet"] = not fo.config.show_progress_bars
+
+        if "iters_str" not in kwargs:
+            kwargs["iters_str"] = "samples"
+
+        # For progress bars in notebooks, use a fixed size so that they will
+        # read well across browsers, in HTML format, etc
+        if foc.is_notebook_context() and "max_width" not in kwargs:
+            kwargs["max_width"] = 90
+
+        super().__init__(*args, **kwargs)
 
 
 @contextmanager
@@ -449,12 +549,16 @@ class UniqueFilenameMaker(object):
         if not input_path:
             input_path = self._default_filename_patt % self._idx
 
+        # @todo improve translation of urls with params, %, etc.
         filename = os.path.basename(input_path)
         name, ext = os.path.splitext(filename)
+        name = name.replace("%", "-")
+        ext = ext.split("?")[0]
 
         if output_ext is not None:
             ext = output_ext
-            filename = name + ext
+
+        filename = name + ext
 
         key = name if self.ignore_exts else filename
         self._filename_counts[key] += 1
@@ -529,7 +633,7 @@ def iter_batches(iterable, batch_size):
 
     Returns:
         a generator that emits tuples of elements of the requested batch size
-        from the input iterable
+        from the input
     """
     it = iter(iterable)
     while True:
@@ -537,6 +641,32 @@ def iter_batches(iterable, batch_size):
         if not chunk:
             return
 
+        yield chunk
+
+
+def iter_slices(sliceable, batch_size):
+    """Iterates over batches of the given object via slicing.
+
+    Args:
+        sliceable: an object that supports slicing
+        batch_size: the desired batch size, or None to return the contents in
+            a single batch
+
+    Returns:
+        a generator that emits batches of elements of the requested batch size
+        from the input
+    """
+    if batch_size is None:
+        yield sliceable
+        return
+
+    start = 0
+    while True:
+        chunk = sliceable[start : (start + batch_size)]
+        if len(chunk) == 0:  # works for numpy arrays, Torch tensors, etc
+            return
+
+        start += batch_size
         yield chunk
 
 
@@ -557,3 +687,89 @@ def call_on_exit(callback):
     """
     atexit.register(callback)
     signal.signal(signal.SIGTERM, lambda *args: callback())
+
+
+class MonkeyPatchFunction(object):
+    """Context manager that temporarily monkey patches the given function.
+
+    If a ``namespace`` is provided, all functions with same name as the
+    function you are monkey patching that are imported (recursively) by the
+    ``module_or_fcn`` module are also monkey patched.
+
+    Args:
+        module_or_fcn: a module or function
+        monkey_fcn: the function to monkey patch in
+        fcn_name (None): the name of the funciton to monkey patch. Required iff
+            ``module_or_fcn`` is a module
+        namespace (None): an optional package namespace
+    """
+
+    def __init__(
+        self, module_or_fcn, monkey_fcn, fcn_name=None, namespace=None
+    ):
+        if inspect.isfunction(module_or_fcn):
+            module = inspect.getmodule(module_or_fcn)
+            fcn_name = module_or_fcn.__name__
+        else:
+            module = module_or_fcn
+
+        self.module = module
+        self.fcn_name = fcn_name
+        self.monkey_fcn = monkey_fcn
+        self.namespace = namespace
+        self._orig = None
+        self._replace_modules = None
+
+    def __enter__(self):
+        self._orig = getattr(self.module, self.fcn_name)
+        self._replace_modules = []
+        self._find(self.module)
+        self._set(self.monkey_fcn)
+        return self
+
+    def __exit__(self, *args):
+        self._set(self._orig)
+
+    def _set(self, fcn):
+        for mod in self._replace_modules:
+            setattr(mod, self.fcn_name, fcn)
+
+    def _find(self, module):
+        dir_module = dir(module)
+        if self.fcn_name in dir_module:
+            self._replace_modules.append(module)
+
+        if self.namespace is not None:
+            for attr in dir_module:
+                mod = getattr(module, attr)
+                if inspect.ismodule(mod) and mod.__package__.startswith(
+                    self.namespace.__package__
+                ):
+                    self._find(mod)
+
+
+class SetAttributes(object):
+    """Context manager that temporarily sets the attributes of a class to new
+    values.
+
+    Args:
+        obj: the object
+        **kwargs: the attribute key-values to set while the context is active
+    """
+
+    def __init__(self, obj, **kwargs):
+        self._obj = obj
+        self._kwargs = kwargs
+        self._orig_kwargs = None
+
+    def __enter__(self):
+        self._orig_kwargs = {}
+        for k, v in self._kwargs.items():
+            self._orig_kwargs[k] = getattr(self._obj, k)
+            setattr(self._obj, k, v)
+
+        return self
+
+    def __exit__(self, *args):
+        for k, v in self._orig_kwargs.items():
+            setattr(self._obj, k, v)

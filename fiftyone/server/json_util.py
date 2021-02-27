@@ -1,12 +1,12 @@
 """
 FiftyOne server json utilies.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
 from bson import ObjectId, json_util
-from flask.json import JSONEncoder
+from json import JSONEncoder
 from collections import OrderedDict
 
 import numpy as np

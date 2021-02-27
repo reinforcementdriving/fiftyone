@@ -43,7 +43,7 @@ type :class:`NoDatasetSampleDocument` to type ``dataset._sample_doc_cls``::
     dataset.add_sample(sample)
     sample._doc  # my_dataset(DatasetSampleDocument)
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -63,7 +63,6 @@ import six
 import fiftyone as fo
 import fiftyone.core.fields as fof
 import fiftyone.core.frame_utils as fofu
-import fiftyone.core.frame as fofr
 import fiftyone.core.metadata as fom
 import fiftyone.core.media as fomm
 import fiftyone.core.utils as fou
@@ -76,7 +75,6 @@ from .document import (
 from .mixins import (
     DatasetMixin,
     default_sample_fields,
-    get_implied_field_kwargs,
     NoDatasetMixin,
 )
 
@@ -101,50 +99,19 @@ class DatasetSampleDocument(DatasetMixin, Document, SampleDocument):
 
     meta = {"abstract": True}
 
-    media_type = fof.StringField()
-
-    # The path to the data on disk
-    filepath = fof.StringField(unique=True)
-
-    # The set of tags associated with the sample
+    filepath = fof.StringField(unique=True, required=True)
     tags = fof.ListField(fof.StringField())
-
-    # Metadata about the sample media
     metadata = fof.EmbeddedDocumentField(fom.Metadata, null=True)
 
-    # Random float used for random dataset operations (e.g. shuffle)
+    _media_type = fof.StringField()
     _rand = fof.FloatField(default=_generate_rand)
 
-    def set_field(self, field_name, value, create=True):
-        if field_name == "frames" and isinstance(value, fofr.Frames):
-            value = value.doc.frames
+    @property
+    def media_type(self):
+        return self._media_type
 
-        super().set_field(field_name, value, create=create)
-
-    @classmethod
-    def from_dict(cls, d, extended=False):
-        try:
-            ff = d["frames"]["first_frame"]
-            for k, v in ff.items():
-                if isinstance(v, dict):
-                    if "_cls" in v:
-                        # Serialized embedded document
-                        _cls = getattr(fo, v["_cls"])
-                        ff[k] = _cls.from_dict(v)
-                    elif "$binary" in v:
-                        # Serialized array in extended format
-                        binary = json_util.loads(json.dumps(v))
-                        ff[k] = fou.deserialize_numpy_array(binary)
-                    else:
-                        ff[k] = v
-                elif isinstance(v, six.binary_type):
-                    # Serialized array in non-extended format
-                    ff[k] = fou.deserialize_numpy_array(v)
-                else:
-                    ff[k] = v
-        except:
-            pass
-        return super().from_dict(d, extended=extended)
+    def _get_repr_fields(self):
+        return ("id", "media_type") + self.field_names
 
 
 class NoDatasetSampleDocument(NoDatasetMixin, SampleDocument):
@@ -158,16 +125,10 @@ class NoDatasetSampleDocument(NoDatasetMixin, SampleDocument):
 
     def __init__(self, **kwargs):
         self._data = OrderedDict()
-        filepath = os.path.abspath(
-            os.path.expanduser(kwargs.get("filepath", None))
-        )
-        media_type = fomm.get_media_type(filepath)
-        if "media_type" in kwargs and kwargs["media_type"] != media_type:
-            raise fomm.MediaTypeError("media_type cannot be set")
 
-        kwargs["media_type"] = media_type
-        if media_type == fomm.VIDEO:
-            kwargs["frames"] = {"frame_count": 0}
+        filepath = os.path.abspath(os.path.expanduser(kwargs["filepath"]))
+        _media_type = fomm.get_media_type(filepath)
+        kwargs["_media_type"] = _media_type
 
         for field_name in self.default_fields_ordered:
             value = kwargs.pop(field_name, None)
@@ -184,3 +145,10 @@ class NoDatasetSampleDocument(NoDatasetMixin, SampleDocument):
             self._data[field_name] = value
 
         self._data.update(kwargs)
+
+    @property
+    def media_type(self):
+        return self._media_type
+
+    def _get_repr_fields(self):
+        return ("id", "media_type") + self.field_names

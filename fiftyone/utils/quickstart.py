@@ -1,77 +1,75 @@
 """
 FiftyOne quickstart.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
+import fiftyone as fo
+import fiftyone.core.context as focx
 import fiftyone.core.session as fos
-import fiftyone.zoo as foz
+import fiftyone.zoo.datasets as fozd
 
 
-def quickstart(interactive=True, video=False, port=5151, remote=False):
+def quickstart(video=False, port=None, remote=False, desktop=None, auto=True):
     """Runs the FiftyOne quickstart.
 
     This method loads an interesting dataset from the Dataset Zoo, launches the
     App, and prints some suggestions for exploring the dataset.
 
     Args:
-        interactive (True): whether to launch the session asynchronously and
-            return a session
         video (False): whether to launch a video dataset
-        port (5151): the port number to serve the App
-        remote (False): whether to launch a remote session
+        port (None): the port number to serve the App. If None,
+            ``fiftyone.config.default_app_port`` is used
+        remote (False): whether this is a remote session, and opening the App
+            should not be attempted
+        desktop (None): whether to launch the App in the browser (False) or as
+            a desktop App (True). If None, ``fiftyone.config.desktop_app`` is
+            used. Not applicable to notebook contexts
+        auto (True): whether to automatically show a new App window
+            whenever the state of the session is updated. Only applicable
+            in notebook contexts
 
     Returns:
-        If ``interactive`` is ``True``, a tuple is returned containing:
+        a tuple containing
 
         -   dataset: the :class:`fiftyone.core.dataset.Dataset` that was loaded
         -   session: the :class:`fiftyone.core.session.Session` instance for
             the App that was launched
-
-        If ``interactive`` is ``False``, ``None`` is returned
     """
     if video:
-        return _video_quickstart(interactive, port, remote)
-    else:
-        return _quickstart(interactive, port, remote)
+        return _video_quickstart(port, remote, desktop, auto)
+
+    return _quickstart(port, remote, desktop, auto)
 
 
-def _quickstart(interactive, port, remote):
-    dataset = foz.load_zoo_dataset("quickstart")
-    session = fos.launch_app(dataset=dataset, port=port, remote=remote)
-
-    # @todo improve readability of stdout when launching remote sessions
-
-    if interactive:
-        print(_QUICKSTART_GUIDE % _FILTER_DETECTIONS_IN_PYTHON)
-        return dataset, session
-
-    print(_QUICKSTART_GUIDE % "")
-    session.wait()
-    return None
+def _quickstart(port, remote, desktop, auto):
+    print(_QUICKSTART_GUIDE)
+    dataset = fozd.load_zoo_dataset("quickstart")
+    return _launch_app(dataset, port, remote, desktop, auto)
 
 
-def _video_quickstart(interactive, port, remote):
-    dataset = foz.load_zoo_dataset("quickstart-video")
-    session = fos.launch_app(dataset=dataset, port=port, remote=remote)
-
-    # @todo improve readability of stdout when launching remote sessions
-
-    if interactive:
-        print(_VIDEO_QUICKSTART_GUIDE)
-        return dataset, session
-
+def _video_quickstart(port, remote, desktop, auto):
     print(_VIDEO_QUICKSTART_GUIDE)
-    session.wait()
-    return None
+    dataset = fozd.load_zoo_dataset("quickstart-video")
+    return _launch_app(dataset, port, remote, desktop, auto)
+
+
+def _launch_app(dataset, port, remote, desktop, auto):
+    session = fos.launch_app(
+        dataset=dataset, port=port, remote=remote, desktop=desktop, auto=auto
+    )
+
+    return dataset, session
 
 
 _QUICKSTART_GUIDE = """
 Welcome to FiftyOne!
 
-This quickstart downloaded a dataset from the Dataset Zoo and opened it in the
-App. The dataset contains ground truth labels in a `ground_truth` field and
+This quickstart downloaded a dataset from the Dataset Zoo and created a
+session, which is a connection to an instance of the App.
+
+The dataset contains ground truth labels in a `ground_truth` field and
 predictions from an off-the-shelf detector in a `predictions` field. It also
 has a `uniqueness` field that indexes the dataset by visual uniqueness.
 
@@ -98,16 +96,7 @@ Here are some things you can do to explore the dataset:
     In the display options menu on the left, click on the `v` caret to the
     right of the `predictions` field to open a label filter. Drag the
     confidence slider to only include predictions with confidence at least 0.8!
-%s
 
-Resources:
-
--   Using the App: https://voxel51.com/docs/fiftyone/user_guide/app.html
--   Dataset Zoo:   https://voxel51.com/docs/fiftyone/user_guide/dataset_creation/zoo.html
-"""
-
-
-_FILTER_DETECTIONS_IN_PYTHON = """
     You can also filter the detections from Python. Assuming you ran the
     quickstart like this::
 
@@ -121,20 +110,26 @@ _FILTER_DETECTIONS_IN_PYTHON = """
 
         # Create a view that only contains predictions whose confidence is at
         # least 0.8
-        high_conf_view = dataset.filter_detections(
-            "predictions", F("confidence") > 0.8
-        )
+        high_conf_view = dataset.filter_labels("predictions", F("confidence") > 0.8)
 
         # Open the view in the App!
         session.view = high_conf_view
+
+Resources:
+
+-   Using the App: https://voxel51.com/docs/fiftyone/user_guide/app.html
+-   Dataset Zoo:   https://voxel51.com/docs/fiftyone/user_guide/dataset_zoo/index.html
+
 """
 
 
 _VIDEO_QUICKSTART_GUIDE = """
 Welcome to FiftyOne!
 
-This quickstart downloaded a dataset from the Dataset Zoo and opened it in the
-App. The dataset contains small video segments with dense object detections
+This quickstart downloaded a dataset from the Dataset Zoo and created a
+session, which is a connection to an instance of the App.
+
+The dataset contains small video segments with dense object detections
 generated by human annotators.
 
 Here are some things you can do to explore the dataset:
@@ -151,5 +146,6 @@ Here are some things you can do to explore the dataset:
 Resources:
 
 -   Using the App: https://voxel51.com/docs/fiftyone/user_guide/app.html
--   Dataset Zoo:   https://voxel51.com/docs/fiftyone/user_guide/dataset_creation/zoo.html
+-   Dataset Zoo:   https://voxel51.com/docs/fiftyone/user_guide/dataset_zoo/index.html
+
 """

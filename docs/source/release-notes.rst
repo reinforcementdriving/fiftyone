@@ -3,6 +3,473 @@ FiftyOne Release Notes
 
 .. default-role:: code
 
+.. _release-notes-v0.7.3:
+
+FiftyOne 0.7.3
+--------------
+*Released February 18, 2021*
+
+App
+^^^
+- Added filtering widgets to the Fields Sidebar for
+  :class:`StringFields <fiftyone.core.fields.StringField>` and
+  :class:`BooleanFields <fiftyone.core.fields.BooleanField>`
+- Added histogram plots for
+  :class:`StringFields <fiftyone.core.fields.StringField>` and
+  :class:`BooleanFields <fiftyone.core.fields.BooleanField>` in the `Scalars`
+  tab
+- Moved `None` selection for
+  :class:`StringFields <fiftyone.core.fields.StringField>` to the input format
+  in the Fields Sidebar
+- Changed `None` options to only be present when `None` values exist for a
+  supported :class:`Field <fiftyone.core.fields.Field>` in the Fields Sidebar
+- Added `Color by label` support for
+  :class:`Classification <fiftyone.core.labels.Classification>`,
+  :class:`Classifications <fiftyone.core.labels.Classifications>`,
+  :class:`BooleanField <fiftyone.core.fields.BooleanField>`, and
+  :class:`StringField <fiftyone.core.fields.StringField>`
+- Added support excluding selected values for a
+  :class:`StringField <fiftyone.core.fields.StringField>` in the Fields
+  Sidebar
+- Various style and interaction improvements in the Fields Sidebar
+- The App will no longer crash when samples whose source media is unsupported
+  or missing are loaded
+
+Core
+^^^^
+- Added
+  :meth:`evaluate_classifications() <fiftyone.core.collections.SampleCollection.evaluate_classifications>`,
+  :meth:`evaluate_detections() <fiftyone.core.collections.SampleCollection.evaluate_detections>`, and
+  :meth:`evaluate_segmentations() <fiftyone.core.collections.SampleCollection.evaluate_segmentations>`
+  methods that provide support for evaluating various types of labels. See the
+  new :ref:`evaluation page <evaluating-models>` of the user guide for more
+  details
+- Added :meth:`one() <fiftyone.core.collections.SampleCollection>` for retrieving
+  one matched |Sample| from a |Dataset| or |DatasetView|
+- Added support for cloning and saving views into video datasets via
+  :meth:`clone() <fiftyone.core.view.DatasetView.clone>` and
+  :meth:`save() <fiftyone.core.view.DatasetView.save>`
+- Added support for extracting batches of frame-level and/or array fields via
+  the :meth:`values() <fiftyone.core.collections.SampleCollection.values>`
+  aggregation
+- Added support for setting batches of frame-level and/or array fields via
+  :meth:`set_values() <fiftyone.core.collections.SampleCollection.set_values>`
+- Added support for accessing samples from a |Dataset| or |DatasetView| via
+  the `dataset[filepath]` syntax
+- Added support for passing |Sample| and any |Sample| iterable, e.g.
+  |DatasetView|, to methods like
+  :meth:`remove_samples() <fiftyone.core.dataset.Dataset.remove_samples>`,
+  :meth:`exclude() <fiftyone.core.collections.SampleCollection.exclude>`, and
+  :meth:`select() <fiftyone.core.collections.SampleCollection.select>`
+- Changed the default value for `only_matches` for
+  :meth:`filter_classifications() <fiftyone.core.collections.SampleCollection.filter_classifications>`,
+  :meth:`filter_detections() <fiftyone.core.collections.SampleCollection.filter_detections>`,
+  :meth:`filter_field() <fiftyone.core.collections.SampleCollection.filter_field>`,
+  :meth:`filter_labels() <fiftyone.core.collections.SampleCollection.filter_labels>`,
+  :meth:`filter_keypoints() <fiftyone.core.collections.SampleCollection.filter_keypoints>`,
+  and
+  :meth:`filter_polylines() <fiftyone.core.collections.SampleCollection.filter_polylines>`
+  from `False` to `True`
+- :meth:`compute_metadata() <fiftyone.core.collections.SampleCollection.compute_metadata>`
+  will now gracefully skip samples for which media metadata cannot be computed
+- Added a :meth:`stats() <fiftyone.core.dataset.Dataset.stats>` method for
+  listing helpful info about the size of various entities of a dataset
+
+Zoo
+^^^
+- Added support for storing logits for many :ref:`zoo models <model-zoo>` when
+  using
+  :meth:`apply_model() <fiftyone.core.collections.SampleCollection.apply_model>`
+- Default confidence thresholds for :ref:`zoo models <model-zoo>` are now
+  stored on a per-model basis rather than as a global default value in
+  :meth:`apply_model() <fiftyone.core.collections.SampleCollection.apply_model>`.
+  All detection models still have a default confidence threshold of 0.3, and
+  all other model types have no default confidence threshold
+
+CLI
+^^^
+- Added a :ref:`migration API <downgrading-fiftyone>` to provide better support
+  for downgrading the version of your `fiftyone` package
+
+Docs
+^^^^
+- Added a new :ref:`evaluation page <evaluating-models>` to the user guide that
+  explains how to evaluate various types of models with FiftyOne
+- Removed legacy `--index` flags from the install instructions from the
+  :ref:`troubleshooting page <alternative-builds>` which prevented a valid
+  installation
+
+FiftyOne 0.7.2
+--------------
+*Released January 28, 2021*
+
+App
+^^^
+- Changed the Fields Sidebar label filters to only return matched samples,
+  i.e., samples with at least one matching label with respect to a filter
+- Fixed a bug in Colab notebooks that allowed for the `.ipynb` file to grow
+  unnecessarily large
+- Improved plotting of numeric fields in the `Scalars` tab, including
+  `[min, max)` ranges for tooltips and integer binning when appropriate
+- Fixed a bug that prevented
+  :meth:`select_fields() <fiftyone.core.collections.SampleCollection.select_fields>`
+  and
+  :meth:`exclude_fields() <fiftyone.core.collections.SampleCollection.exclude_fields>`
+  from being properly respected by the Fields Sidebar
+- Fixed a bug that prevented selected samples from being cleared when modifying
+  your view or choosing an option from the select samples dropdown
+- Added an |AppConfig| for configuring options like the color pool to use when
+  drawing |Label| fields. See :ref:`this page <configuring-fiftyone-app>` for
+  more info
+
+Core
+^^^^
+- Added the :class:`MapLabels <fiftyone.core.stages.MapLabels>` and
+  :class:`SetField <fiftyone.core.stages.SetField>` view stages
+- Added the
+  :class:`HistogramValues <fiftyone.core.aggregations.HistogramValues>` and
+  :class:`Sum <fiftyone.core.aggregations.Sum>` aggregations
+- Added over a dozen new
+  |ViewExpression| methods including powerful transformations like
+  :meth:`map_values() <fiftyone.core.expressions.ViewExpression.map_values>`,
+  :meth:`reduce() <fiftyone.core.expressions.ViewExpression.reduce>`, and
+  :meth:`sort() <fiftyone.core.expressions.ViewExpression.sort>`
+- Exposed all :class:`Aggregtaions <fiftyone.core.aggregations.Aggregation>` as
+  single execution methods on the |SampleCollection| interface, e.g.,
+  :meth:`distinct() <fiftyone.core.collections.SampleCollection.distinct>`
+- Added support for all |Label| types in
+  :meth:`filter_labels() <fiftyone.core.collections.SampleCollection.filter_labels>`
+- Added support for generalized field paths (embedded fields, lists, etc) to
+  the :class:`Bounds <fiftyone.core.aggregations.Bounds>`,
+  :class:`Count <fiftyone.core.aggregations.Count>`,
+  :class:`CountValues <fiftyone.core.aggregations.CountValues>`, and
+  :class:`Distinct <fiftyone.core.aggregations.Distinct>`
+  aggregations
+- Removed the deprecated
+  :class:`ConfidenceBounds <fiftyone.core.aggregations.ConfidenceBounds>`,
+  :class:`CountLabels <fiftyone.core.aggregations.CountLabels>`, and
+  :class:`DistinctLabels <fiftyone.core.aggregations.DistinctLabels>`
+  aggregations
+- Removed the redundant
+  :meth:`match_tag() <fiftyone.core.collections.SampleCollection.match_tag>`
+  stage in favor of
+  :meth:`match_tags() <fiftyone.core.collections.SampleCollection.match_tags>`
+- Removed `AggregationResult` classes in favor of returning
+  :class:`Aggregation <fiftyone.core.aggregations.Aggregation>` results
+  directly as builtin types
+- Added the optional `config` keyword argument to
+  :meth:`launch_app() <fiftyone.core.session.launch_app>` and
+  :class:`Session <fiftyone.core.session.Session>` for overriding the default
+  :ref:`AppConfig <configuring-fiftyone-app>`.
+
+Zoo
+^^^
+- Added a default confidence threshold of `0.3` when applying models from the
+  :ref:`Model Zoo <model-zoo>` via
+  :meth:`apply_model() <fiftyone.core.collections.SampleCollection.apply_model>`,
+  which omits spurious low quality predictions from many models
+
+CLI
+^^^
+- Added a :ref:`fiftyone app config <cli-fiftyone-app-config>` command for
+  inspecting the default :ref:`App config <configuring-fiftyone-app>`
+- Improved `ctrl + c` exit handling for CLI commands
+
+Docs
+^^^^
+- Added a :ref:`new section <configuring-fiftyone-app>` to the
+  :ref:`Configuring FiftyOne guide <configuring-fiftyone>` explaining how to
+  programmatically configure the App's behavior
+- Updated the :ref:`Dataset views guide <using-views>` to provide a thorough
+  overview of new functionality provided by stages like
+  :class:`SetField <fiftyone.core.stages.SetField>`
+- Updated the :ref:`Aggregations guide <using-aggregations>` to provide a
+  thorough overview and examples of various aggregation functionality,
+  including advanced usage tips
+- Added an FAQ section providing instructions for working with
+  :ref:`remote Jupyter notebooks <faq-remote-notebook-support>`
+- Added code examples to all |ViewStage| class docstrings and their
+  corresponding sample collection methods, e.g.,
+  :meth:`map_labels() <fiftyone.core.collections.SampleCollection.map_labels>`
+- Added code examples to all |Aggregation| class docs and their corresponding
+  sample collection methods, e.g.,
+  :meth:`bounds() <fiftyone.core.collections.SampleCollection.bounds>`
+
+.. _release-notes-v0.7.1:
+
+FiftyOne 0.7.1
+--------------
+*Released January 8, 2021*
+
+App
+^^^
+- Added automatic screenshotting for :ref:`notebook environments <notebooks>`
+- Fixed a bug where the Fields Sidebar statistics would not load for empty
+  views
+- Fixed style inconsistencies in Firefox
+
+Core
+^^^^
+- Added :meth:`Session.freeze() <fiftyone.core.session.Session.freeze>` for
+  manually screenshotting the active App in a notebook environment
+- Renamed ``Dataset.clone_field()`` to
+  :meth:`Dataset.clone_sample_field() <fiftyone.core.dataset.Dataset.clone_sample_field>`
+  for consistency with other operations
+- Added a
+  :meth:`Dataset.clone_frame_field() <fiftyone.core.dataset.Dataset.clone_frame_field>`
+  method for cloning frame-level fields of video datasets
+- Added
+  :meth:`DatasetView.clone_sample_field() <fiftyone.core.view.DatasetView.clone_sample_field>`
+  and
+  :meth:`DatasetView.clone_frame_field() <fiftyone.core.view.DatasetView.clone_frame_field>`
+  methods that allow cloning views into sample fields (e.g., after filtering
+  the labels in a list field)
+- Added a :meth:`DatasetView.clone() <fiftyone.core.view.DatasetView.clone>`
+  method for cloning a view as a new dataset
+- Added a :meth:`DatasetView.save() <fiftyone.core.view.DatasetView.save>`
+  method for saving a view, overwriting the contents of the underlying dataset
+- Re-implemented
+  :meth:`Dataset.clone_sample_field() <fiftyone.core.dataset.Dataset.clone_sample_field>`
+  and
+  :meth:`Dataset.merge_samples() <fiftyone.core.dataset.Dataset.merge_samples>`
+  via efficient DB-only operations
+- Added the `overwrite` keyword argument to the
+  :class:`Dataset() <fiftyone.core.dataset.Dataset>` constructor
+- Added a ``database_dir`` option to the
+  :ref:`FiftyOne Config <configuring-fiftyone>`
+- Added a ``default_app_port`` option to the
+  :ref:`FiftyOne Config <configuring-fiftyone>`
+
+Zoo
+^^^
+- Added a :ref:`CenterNet model <model-zoo-centernet-hg104-512-coco-tf2>` to
+  the model zoo
+- Upgraded the :ref:`Model Zoo <model-zoo>` so that many detection models that
+  previously required TensorFlow 1.X can now be used with TensorFlow 2.X
+- Added :ref:`Caltech-256 <dataset-zoo-caltech256>` to the dataset zoo
+- Added :ref:`ImageNet Sample <dataset-zoo-imagenet-sample>` to the dataset zoo
+- :ref:`Caltech-101 <dataset-zoo-caltech101>` is now available natively in the
+  dataset zoo without the TF backend
+- :ref:`KITTI <dataset-zoo-kitti>` is now available natively in the dataset zoo
+  without the TF backend
+- Fixed a bug that prevented :ref:`ImageNet 2012 <dataset-zoo-imagenet-2012>`
+  from loading properly when using the TF backend
+
+CLI
+^^^
+- Added support for controlling the error level when
+  :ref:`applying zoo models <cli-fiftyone-zoo-models-apply>`
+
+Docs
+^^^^
+- Added a :ref:`Dataset Zoo listing <dataset-zoo-datasets>` that describes all
+  datasets in the zoo
+- Added a :ref:`Model Zoo listing <model-zoo-models>` that describes all models
+  in the zoo
+
+.. _release-notes-v0.7.0:
+
+FiftyOne 0.7.0
+--------------
+*Released December 21, 2020*
+
+App
+^^^
+- Added web browser support, which is now the default settting
+- Added :ref:`IPython notebook support <notebooks>`, e.g. Jupyter and Google
+  Colab
+- The desktop App can now be installed as an
+  :ref:`optional dependency <installing-fiftyone-desktop>`
+- Fixed an issue where the App would freeze after filtering labels in the
+  Fields Sidebar
+
+Core
+^^^^
+- Added a :ref:`Model Zoo <model-zoo>` containing over 70 pretrained detection,
+  classification, and segmentation models that you can use to generate
+  predictions and embeddings
+- Moved project hosting to `pypi.org <https://pypi.org/project/fiftyone/>`_
+- Added the :meth:`Session.show() <fiftyone.core.session.Session.show>` method
+  for displaying the App in IPython notebook cells
+- Added an in-App feedback form. We would love to hear from you!
+- Added Python 3.9 support
+- Removed Python 3.5 support
+
+CLI
+^^^
+- Added a :ref:`fiftyone zoo models <cli-fiftyone-zoo-models>` command that
+  provides access to the model zoo
+- Moved the dataset zoo commands to
+  :ref:`fiftyone zoo datasets <cli-fiftyone-zoo-datasets>` (previously they
+  were at ``fiftyone zoo``)
+- Added a ``--desktop`` flag to commands that launch the App that enables
+  launching the App as a desktop App (rather than a web browser)
+
+.. _release-notes-v0.6.6:
+
+FiftyOne 0.6.6
+--------------
+*Released November 25, 2020*
+
+App
+^^^
+- Added a dropdown in the header to change datasets from the App
+- Added the ability to refresh the App by clicking the FiftyOne logo in the
+  header
+- Fixed a bug the caused numeric (scalar field) range sliders to disappear
+  after changing the default value
+- Fixed a bug that prevented the App state from updating appropriately after
+  applying label filters
+
+Core
+^^^^
+- Fixed a bug that prevented COCO datasets from being loaded from the
+  :ref:`Dataset Zoo <dataset-zoo>`
+
+Brain
+^^^^^
+- Added support for computing mistakenness for detections when using
+  :meth:`compute_mistakenness() <fiftyone.brain.compute_mistakenness>`
+
+CLI
+^^^
+- Added support for customizing the local port when connecting to the App via
+  the CLI
+- Added an `--ssh-key` option to the `app connect` command
+
+Docs
+^^^^
+- Added :doc:`a tutorial </tutorials/detection_mistakes>` demonstrating how to
+  use :meth:`compute_mistakenness() <fiftyone.brain.compute_mistakenness>` to
+  detect label mistakes for detection datasets
+- Added questions to the :ref:`FAQ page <faq>`:
+   - :ref:`Can I launch multiple App instances on a machine? <faq-multiple-apps>`
+   - :ref:`Can I connect multiple App instances to the same dataset? <faq-multiple-sessions-same-dataset>`
+   - :ref:`Can I connect to multiple remote sessions? <faq-connect-to-multiple-remote-sessions>`
+   - :ref:`Can I serve multiple remote sessions from a machine? <faq-serve-multiple-remote-sessions>`
+
+.. _release-notes-v0.6.5:
+
+FiftyOne 0.6.5
+--------------
+*Released November 16, 2020*
+
+App
+^^^
+- Added concurrency to the server wich greatly improves loading speeds and
+  time-to-interaction in the Grid, View Bar, and Fields Sidebar for larger
+  datasets and views
+- Renamed the Display Options Sidebar to the Fields Sidebar
+- Added support for coloring by `label` value in the Fields Sidebar
+- Added support for filtering
+  :class:`keypoint <fiftyone.core.labels.Keypoint>`,
+  :class:`keypoints <fiftyone.core.labels.Keypoints>`,
+  :class:`polyline <fiftyone.core.labels.Polyline>`,
+  :class:`polylines <fiftyone.core.labels.Polylines>` fields by `label` value
+  in the Fields Sidebar
+- Moved plot tabs into an expandable window that can be resized and maximized.
+  This allows for viewing distributions and the sample grid at the same time
+- Fixed video loading in the grid and modal for video samples with metadata
+- Fixed showing and hiding samples in the select sample menu
+- Fixed a memory usage bug in the sample grid
+
+Core
+^^^^
+- Added `Cityscapes <https://www.cityscapes-dataset.com/>`_ and
+  `LFW <http://vis-www.cs.umass.edu/lfw>`_ to the
+  :ref:`Dataset Zoo <dataset-zoo>`
+- Added support for renaming and deleting embedded document fields of samples
+  via :meth:`Dataset.rename_sample_field() <fiftyone.core.dataset.Dataset.rename_sample_field>` and
+  :meth:`Dataset.delete_sample_field() <fiftyone.core.dataset.Dataset.delete_sample_field>`
+- Added support for renaming and deleting embedded document fields of frames
+  of video samples via :meth:`Dataset.rename_frame_field() <fiftyone.core.dataset.Dataset.rename_frame_field>` and
+  :meth:`Dataset.delete_frame_field() <fiftyone.core.dataset.Dataset.delete_frame_field>`
+- Added support for deleting fields and embedded fields of individual samples
+  via :meth:`Sample.clear_field() <fiftyone.core.sample.Sample.clear_field>`
+  and :meth:`del sample[field_name] <fiftyone.core.sample.Sample.__delitem__>`
+- Added support for deleting fields and embedded fields of frame labels via
+  :meth:`Frame.clear_field() <fiftyone.core.frame.Frame.clear_field>`
+  and :meth:`del frame[field_name] <fiftyone.core.frame.Frame.__delitem__>`
+- Added support for reading/writing video datasets in JSON format via
+  :meth:`Dataset.from_json() <fiftyone.core.dataset.Dataset.from_json>` and
+  :meth:`SampleCollection.write_json() <fiftyone.core.collections.SampleCollection.write_json>`,
+  respectively
+- Fixed a bug that prevented
+  :meth:`Dataset.add_sample() <fiftyone.core.dataset.Dataset.add_sample>` and
+  :meth:`Dataset.add_samples() <fiftyone.core.dataset.Dataset.add_samples>`
+  from working properly when provided samples that belong to other sample
+  collections
+- Fixed a bug that prevented frame labels from being properly cloned when
+  calling :meth:`Dataset.clone() <fiftyone.core.dataset.Dataset.clone>` on
+  video datasets
+
+Utils
+^^^^^
+- Added :mod:`a module <fiftyone.utils.scale>` for importing and exporting
+  annotations from `Scale AI <https://scale.com>`_
+- Added :mod:`a module <fiftyone.utils.labelbox>` for importing and exporting
+  annotations from `Labelbox <https://labelbox.com>`_
+
+Docs
+^^^^
+- Added an :ref:`Environments page <environments>` that outlines how
+  to work with local, remote, and cloud data. Includes instructions for AWS,
+  Google Cloud, and Azure
+- Add an :ref:`FAQ page <faq>`
+
+.. _release-notes-v0.6.4:
+
+FiftyOne 0.6.4
+--------------
+*Released October 29, 2020*
+
+App
+^^^
+- Improved page load times for video datasets
+- Improved support for frame- and sample-level labels in display options for
+  video datasets
+- Added support for all label types in the labels distributions tab
+- Added support for selecting and hiding objects in the sample modal
+
+Core
+^^^^
+- Added the
+  :meth:`filter_labels() <fiftyone.core.collections.SampleCollection.filter_labels>`
+  view stage, which supercedes the old dedicated per-label-type filtering
+  stages
+- Added
+  :meth:`select_objects() <fiftyone.core.collections.SampleCollection.select_objects>`
+  and
+  :meth:`exclude_objects() <fiftyone.core.collections.SampleCollection.exclude_objects>`
+  to select or exclude objects from a dataset or view
+- Added an :mod:`aggregations framework <fiftyone.core.aggregations>` for
+  computing aggregate values via
+  :meth:`aggregate() <fiftyone.core.collections.SampleCollection.aggregate>`
+- Added the
+  :attr:`selected_objects <fiftyone.core.session.Session.selected_objects>`
+  session attribute, which holds the currently selected objects in the App
+- Added support for
+  :meth:`adding <fiftyone.core.dataset.Dataset.add_frame_field>`,
+  :meth:`renaming <fiftyone.core.dataset.Dataset.rename_frame_field>`, and
+  :meth:`deleting <fiftyone.core.dataset.Dataset.delete_frame_field>`
+  frame-level fields of video datasets
+
+Utils
+^^^^^
+- Added the
+  :class:`TorchImagePatchesDataset <fiftyone.utils.torch.TorchImagePatchesDataset>`
+  that emits tensors of patches extracted from images defined by sets of
+  :class:`Detections <fiftyone.core.labels.Detections>` associated with the
+  images
+
+Brain
+^^^^^
+- Added support for computing uniqueness within regions-of-interest specified
+  by a set of detections/polylines when using
+  :meth:`compute_uniqueness() <fiftyone.brain.compute_uniqueness>`
+
+.. _release-notes-v0.6.3:
+
 FiftyOne 0.6.3
 --------------
 *Released October 20, 2020*
@@ -23,8 +490,7 @@ Core
   the :ref:`Dataset Zoo <dataset-zoo>`
 - Added new versions of `COCO <https://cocodataset.org/#home>`_ that contain
   instance segmentations to the :ref:`Dataset Zoo <dataset-zoo>`
-- Added :mod:`utilities <fiftyone.utils.selection>` for selecting objects from
-  datasets via the Python library
+- Added utilities for selecting objects from datasets via the Python library
 - Added a boolean `only_matches` parameter to all filter stages that enables
   the user to specify that a view should only contain samples that match the
   given filter
@@ -35,6 +501,8 @@ Utils
 - Added a :meth:`reencode_videos() <fiftyone.utils.video.reencode_videos>`
   utility to re-encode the videos in a sample collection so that they are
   visualizable in the FiftyOne App
+
+.. _release-notes-v0.6.2:
 
 FiftyOne 0.6.2
 --------------
@@ -63,11 +531,6 @@ Core
 - Polylines and keypoints can now be :ref:`imported <CVATVideoDataset-import>` and
   :ref:`exported <CVATVideoDataset-export>` when using
   `CVAT video format <https://github.com/openvinotoolkit/cvat/blob/develop/cvat/apps/documentation/xml_format.md>`_
-- Added support for filtering polylines and keypoints via new
-  :meth:`filter_polylines() <fiftyone.core.collections.SampleCollection.filter_polylines>`
-  and
-  :meth:`filter_keypoints() <fiftyone.core.collections.SampleCollection.filter_keypoints>`
-  view stages
 - Added support for rendering annotated versions of video samples with their
   frame labels overlaid via
   :meth:`draw_labels() <fiftyone.core.collections.SampleCollection.draw_labels>`
@@ -83,9 +546,11 @@ Core
 
 Brain
 ^^^^^
-- :meth:`compute_uniqueness() <fiftyone.brain.uniqueness.compute_uniqueness>`
-  and :meth:`compute_hardness() <fiftyone.brain.hardness.compute_hardness>` now
-  support multilabel classification tasks
+- :meth:`compute_uniqueness() <fiftyone.brain.compute_uniqueness>` and
+  :meth:`compute_hardness() <fiftyone.brain.compute_hardness>` now support
+  multilabel classification tasks
+
+.. _release-notes-v0.6.1:
 
 FiftyOne 0.6.1
 --------------
@@ -126,10 +591,12 @@ CLI
   :ref:`fiftyone datasets delete <cli-fiftyone-datasets-delete>` to delete all
   datasets matching a pattern and all non-persistent datasets
 
-Documentation
-^^^^^^^^^^^^^
+Docs
+^^^^
 - Added a recipe for :doc:`merging datasets </recipes/merge_datasets>`
 - Fixed some table widths and other display issues
+
+.. _release-notes-v0.6.0:
 
 FiftyOne 0.6.0
 --------------
@@ -148,17 +615,19 @@ Core
 - Added support for :ref:`importing <FiftyOneVideoLabelsDataset-import>` and
   :ref:`exporting <FiftyOneVideoLabelsDataset-export>` labeled video
   datasets in
-  `ETA VideoLabels format <https://voxel51.com/docs/api/#types-videolabels>`_.
+  `ETA VideoLabels format <https://github.com/voxel51/eta/blob/develop/docs/video_labels_guide.md>`_.
 - Added support for :ref:`importing <writing-a-custom-dataset-importer>` and
   :ref:`exporting <writing-a-custom-dataset-exporter>` video datasets in
   custom formats
 - Improved the performance of
-  :meth:`Dataset.rename_field() <fiftyone.core.dataset.Dataset.rename_field>`
+  :meth:`Dataset.rename_sample_field() <fiftyone.core.dataset.Dataset.rename_sample_field>`
 - Added support for using disk space when running aggregation pipelines on
   large datasets
 - Added support for automatically creating database indexes when sorting by
   sample fields, for efficiency
 - Fixed issues with serializing vector fields and numpy arrays
+
+.. _release-notes-v0.5.6:
 
 FiftyOne 0.5.6
 --------------
@@ -186,8 +655,10 @@ Core
   :meth:`Dataset.merge_samples() <fiftyone.core.dataset.Dataset.merge_samples>`
   method for merging samples in datasets via joining by ``filepath``
 - Added a
-  :meth:`Dataset.rename_field() <fiftyone.core.dataset.Dataset.rename_field>`
+  :meth:`Dataset.rename_sample_field() <fiftyone.core.dataset.Dataset.rename_sample_field>`
   method for renaming sample fields of datasets
+
+.. _release-notes-v0.5.5:
 
 FiftyOne 0.5.5
 --------------
@@ -212,6 +683,8 @@ Core
 ^^^^
 - Added support for :meth:`Session.wait() <fiftyone.core.session.Session.wait>`
   for remote sessions, to make starting a remote session from a script easier
+
+.. _release-notes-v0.5.4:
 
 FiftyOne 0.5.4
 --------------
@@ -239,6 +712,8 @@ Core
   expect |Detections| labels
 - Added support for importing/exporting supercategories for datasets in
   :ref:`COCO format <COCODetectionDataset-import>`
+
+.. _release-notes-v0.5.3:
 
 FiftyOne 0.5.3
 --------------
@@ -270,6 +745,8 @@ Core
   :meth:`shuffle() <fiftyone.core.collections.SampleCollection.shuffle>` view
   stages with random seeds to be regenerated when handing off between the App
   and Python shell
+
+.. _release-notes-v0.5.2:
 
 FiftyOne 0.5.2
 --------------
@@ -311,16 +788,12 @@ Core
 
 Docs
 ^^^^
-- Added a
-  `getting started with FiftyOne <https://github.com/voxel51/fiftyone/blob/develop/WALKTHROUGH.md>`_
-  walkthrough to the GitHub repository
 - Updated the :doc:`evaluate object detections </tutorials/evaluate_detections>`
   tutorial to make it more friendly for execution on CPU-only machines
-- Added
-  :meth:`detailed examples <fiftyone.core.collections.SampleCollection.filter_detections>`
-  of using view stages to the docs
 - Refreshed all App-related media in the docs to reflect the new App design
   introduced in v0.5.0
+
+.. _release-notes-v0.5.1:
 
 FiftyOne 0.5.1
 --------------
@@ -355,12 +828,13 @@ Core
   :meth:`contains_str() <fiftyone.core.expressions.ViewExpression.contains_str>` and
   :meth:`matches_str() <fiftyone.core.expressions.ViewExpression.matches_str>`
 
-Documentation
-^^^^^^^^^^^^^
-- Added :doc:`a tutorial </tutorials/open_images_evaluation>` demonstrating
-  performing error analysis on the
+Docs
+^^^^
+- Added a tutorial demonstrating performing error analysis on the
   `Open Images Dataset <https://storage.googleapis.com/openimages/web/index.html>`_
   powered by FiftyOne
+
+.. _release-notes-v0.5.0:
 
 FiftyOne 0.5.0
 --------------
@@ -395,6 +869,8 @@ Core
   view stage so that each instance of a view maintains a deterministic set of
   samples
 
+.. _release-notes-v0.4.1:
+
 FiftyOne 0.4.1
 --------------
 *Released August 4, 2020*
@@ -403,9 +879,8 @@ Core
 ^^^^
 - Added a powerful :mod:`fiftyone.core.expressions` module for constructing
   complex DatasetView :meth:`match() <fiftyone.core.collections.SampleCollection.match>`,
-  :meth:`filter_classifications() <fiftyone.core.collections.SampleCollection.filter_classifications>`,
-  :meth:`filter_detections() <fiftyone.core.collections.SampleCollection.filter_detections>`, and
-  :meth:`sort_by() <fiftyone.core.collections.SampleCollection.sort_by>` stages
+  :meth:`sort_by() <fiftyone.core.collections.SampleCollection.sort_by>`, etc.
+  stages
 - Added an
   :meth:`evaluate_detections() <fiftyone.utils.eval.coco.evaluate_detections>`
   utility for evaluating object detections in FiftyOne datasets
@@ -414,8 +889,8 @@ Core
   :meth:`draw_labels() <fiftyone.core.collections.SampleCollection.draw_labels>`
   method
 
-Documentation
-^^^^^^^^^^^^^
+Docs
+^^^^
 - Added :doc:`a tutorial </tutorials/evaluate_detections>` demonstrating
   object detection evaluation workflows powered by FiftyOne
 - Added :doc:`full documentation </user_guide/using_views>` for constructing
@@ -428,6 +903,8 @@ Documentation
 - Improved layout of :doc:`tutorials </tutorials/index>`,
   :doc:`recipes </recipes/index>`, and :doc:`user guide </user_guide/index>`
   landing pages
+
+.. _release-notes-v0.4.0:
 
 FiftyOne 0.4.0
 --------------
@@ -453,8 +930,8 @@ App
 - Fixed an issue that could cause launching the App to fail on Windows under
   Python 3.6 and older
 
-Documentation
-^^^^^^^^^^^^^
+Docs
+^^^^
 - Added a recipe demonstrating how to
   :doc:`convert datasets </recipes/convert_datasets>` on disk between common
   formats
@@ -464,6 +941,8 @@ Documentation
   :doc:`custom sample parsers </recipes/custom_parser>`
 - Added a :doc:`Configuring FiftyOne </user_guide/config>` page to the User
   Guide that explains how to customize your FiftyOne Config
+
+.. _release-notes-v0.3.0:
 
 FiftyOne 0.3.0
 --------------
@@ -504,6 +983,8 @@ CLI
   terminal with a `less`-like interface
 - Added `fiftyone datasets export` to export datasets in any available format
 
+.. _release-notes-v0.2.1:
+
 FiftyOne 0.2.1
 --------------
 *Released June 19, 2020*
@@ -519,6 +1000,8 @@ CLI
 ^^^
 - Fixed an issue that could cause port forwarding to hang when initializing a
   remote session
+
+.. _release-notes-v0.2.0:
 
 FiftyOne 0.2.0
 --------------

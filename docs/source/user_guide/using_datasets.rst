@@ -1,16 +1,16 @@
+.. _using-datasets:
+
 Using FiftyOne Datasets
 =======================
 
 .. default-role:: code
 
-After a |WhatIsAFiftyOneDataset| has been loaded or created, FiftyOne provides
-powerful functionality to inspect, search, and modify it from a |Dataset|-wide
-down to a |Sample| level.
+After a |Dataset| has been loaded or created, FiftyOne provides powerful
+functionality to inspect, search, and modify it from a |Dataset|-wide down to
+a |Sample| level.
 
 The following sections provide details of how to use various aspects of a
 FiftyOne |Dataset|.
-
-.. _using-datasets:
 
 Datasets
 ________
@@ -312,46 +312,56 @@ last samples in a dataset, respectively:
     first_sample = dataset.first()
     last_sample = dataset.last()
 
-Samples can be accessed directly from datasets by their IDs. The |Sample|
-that is returned when accessing a |Dataset| will always provide the same
-instance:
+Samples can be accessed directly from datasets by their IDs or their filepaths.
+|Sample| objects are singletons, so the same |Sample| instance is returned
+whenever accessing the sample from the |Dataset|:
 
 .. code-block:: python
     :linenos:
 
     same_sample = dataset[sample.id]
-
     print(same_sample is sample)
     # True
 
-You can use :doc:`DatasetViews <using_views>` to perform more
-sophisticated operations on samples like searching, filtering, sorting, and
-slicing.
+    also_same_sample = dataset[sample.filepath]
+    print(also_same_sample is sample)
+    # True
+
+You can use :ref:`dataset views <using-views>` to perform more sophisticated
+operations on samples like searching, filtering, sorting, and slicing.
 
 Removing samples from a dataset
 -------------------------------
 
-Samples can be removed from a |Dataset| through their ID, either one at a
-time or in a batch:
-
-.. code-block:: python
-    :linenos:
-
-    del dataset[sample_id]
-
-    dataset.remove_samples([sample_id2, sample_id3])
-
-Samples can also be removed from a |Dataset| by using the sample's ID or the
-|Sample| instance:
+Samples can be removed from a |Dataset| through their ID, either one at a time
+or in batches via
+:meth:`remove_sample() <fiftyone.core.dataset.Dataset.remove_sample>` and
+:meth:`remove_samples() <fiftyone.core.dataset.Dataset.remove_samples>`,
+respectively:
 
 .. code-block:: python
     :linenos:
 
     dataset.remove_sample(sample_id)
 
-    # Equivalently
-    sample = dataset[sample_id]
+    # equivalent to above
+    del dataset[sample_id]
+
+    dataset.remove_samples([sample_id2, sample_id3])
+
+Samples can also be removed from a |Dataset| by passing |Sample| instance(s)
+or |DatasetView| instances:
+
+.. code-block:: python
+    :linenos:
+
+    # Remove a random sample
+    sample = dataset.take(1).first()
     dataset.remove_sample(sample)
+
+    # Remove 10 random samples
+    view = dataset.take(10)
+    dataset.remove_samples(view)
 
 If a |Sample| object in memory is deleted from a dataset, it will revert to
 a |Sample| that has not been added to a |Dataset|:
@@ -485,6 +495,8 @@ attribute or item access:
 
     sample.filepath
     sample["filepath"]  # equivalent
+
+.. _adding-sample-fields:
 
 Adding fields to a sample
 -------------------------
@@ -623,8 +635,8 @@ dataset splits or mark low quality images:
         ]
     )
 
-    print(dataset.get_tags())
-    # {"test", "low_quality", "train"}
+    print(dataset.distinct("tags").values)
+    # ["test", "low_quality", "train"]
 
 The `tags` field can be treated like a standard Python `list`:
 
@@ -647,9 +659,9 @@ ________
 
 All |Sample| instances have a `metadata` field, which can optionally be
 populated with a |Metadata| instance that stores data type-specific metadata
-about the raw data in the sample. The :doc:`FiftyOne App </user_guide/app>` and
-the :doc:`FiftyOne Brain </user_guide/brain>` will use this provided metadata
-in some workflows when it is available.
+about the raw data in the sample. The :ref:`FiftyOne App <fiftyone-app>` and
+the :ref:`FiftyOne Brain <fiftyone-brain>` will use this provided metadata in
+some workflows when it is available.
 
 You can automically compute metadata for all samples in a dataset via
 :meth:`Dataset.compute_metadata() <fiftyone.core.collections.SampleCollection.compute_metadata>`.
@@ -802,8 +814,8 @@ truth or predicted labels in a sample.
 
 Although such information can be stored in custom sample fields
 (e.g, in a |DictField|), it is recommended that you store label information in
-|Label| instances so that the :doc:`FiftyOne App </user_guide/app>` and the
-:doc:`FiftyOne Brain </user_guide/brain>` can visualize and compute on your
+|Label| instances so that the :ref:`FiftyOne App <fiftyone-app>` and the
+:ref:`FiftyOne Brain <fiftyone-brain>` can visualize and compute on your
 labels.
 
 .. note::
@@ -1063,7 +1075,7 @@ detection can be stored in the
         }>,
     }>
 
-.. -objects-with-instance-segmentations:
+.. _objects-with-instance-segmentations:
 
 Objects with instance segmentations
 -----------------------------------
@@ -1133,7 +1145,7 @@ object's bounding box when visualizing in the App.
         }>,
     }>
 
-.. -objects-with-attributes:
+.. _objects-with-attributes:
 
 Objects with attributes
 -----------------------
@@ -1331,7 +1343,7 @@ Polylines can also have string labels, which are stored in their
         }>,
     }>
 
-.. -polylines-with-attributes:
+.. _polylines-with-attributes:
 
 Polylines with attributes
 -------------------------
@@ -1470,7 +1482,7 @@ list of ``(x, y)`` coordinates defining a set of keypoints in the image. Each
         }>,
     }>
 
-.. -keypoints-with-attributes:
+.. _keypoints-with-attributes:
 
 Keypoints with attributes
 -------------------------

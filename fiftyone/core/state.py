@@ -1,23 +1,23 @@
 """
-Defines the shared state between the FiftyOne App and SDK.
+Defines the shared state between the FiftyOne App and backend.
 
-| Copyright 2017-2020, Voxel51, Inc.
+| Copyright 2017-2021, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-from collections import OrderedDict
 import logging
-
-from bson import json_util
 
 import eta.core.serial as etas
 
+import fiftyone as fo
+import fiftyone.core.aggregations as foa
+import fiftyone.core.config as foc
 import fiftyone.core.dataset as fod
 import fiftyone.core.fields as fof
 import fiftyone.core.labels as fol
-import fiftyone.core.odm as foo
 import fiftyone.core.media as fom
-import fiftyone.core.stages as fos
+import fiftyone.core.sample as fosa
+import fiftyone.core.stages as fost
 import fiftyone.core.utils as fou
 import fiftyone.core.view as fov
 
@@ -29,39 +29,42 @@ class StateDescription(etas.Serializable):
     """Class that describes the shared state between the FiftyOne App and
     a corresponding :class:`fiftyone.core.session.Session`.
 
-    Attributes:
-        dataset: the current :class:`fiftyone.core.session.Session`
-        selected: the list of currently selected samples
-        view: the current :class:`fiftyone.core.view.DatasetView`
-
     Args:
         close (False): whether to close the app
         connected (False): whether the session is connected to an app
         dataset (None): the current :class:`fiftyone.core.dataset.Dataset`
         selected (None): the list of currently selected samples
+        selected_objects (None): the list of currently selected objects
         view (None): the current :class:`fiftyone.core.view.DatasetView`
+        config (None): an optional :class:`fiftyone.core.config.AppConfig`
+        refresh (False): a boolean toggle for forcing an App refresh
     """
 
     def __init__(
         self,
+        active_handle=None,
         close=False,
         connected=False,
         dataset=None,
+        datasets=None,
         selected=None,
+        selected_objects=None,
         view=None,
+        filters={},
+        config=None,
+        refresh=False,
     ):
+        self.config = config or fo.app_config.copy()
         self.close = close
         self.connect = connected
         self.dataset = dataset
         self.view = view
         self.selected = selected or []
-        self.view_count = (
-            len(view)
-            if view is not None
-            else len(dataset)
-            if dataset is not None
-            else 0
-        )
+        self.selected_objects = selected_objects or []
+        self.filters = filters
+        self.datasets = datasets or fod.list_datasets()
+        self.active_handle = active_handle
+        self.refresh = refresh
         super().__init__()
 
     def serialize(self, reflective=False):
@@ -92,397 +95,129 @@ class StateDescription(etas.Serializable):
         )
 
     @classmethod
-    def from_dict(cls, d, **kwargs):
+    def from_dict(cls, d, with_config=None, **kwargs):
         """Constructs a :class:`StateDescription` from a JSON dictionary.
 
         Args:
             d: a JSON dictionary
+            with_config: an existing app config to attach and apply settings to
 
         Returns:
             :class:`StateDescription`
         """
+        config = with_config or fo.app_config.copy()
+        foc._set_settings(config, d.get("config", {}))
+
+        active_handle = d.get("active_handle", None)
         close = d.get("close", False)
         connected = d.get("connected", False)
+        filters = d.get("filters", {})
+        selected = d.get("selected", [])
+        selected_objects = d.get("selected_objects", [])
+        refresh = d.get("refresh", False)
 
         dataset = d.get("dataset", None)
         if dataset is not None:
             dataset = fod.load_dataset(dataset.get("name"))
 
-        view_ = d.get("view", None)
-        view = None
-        if dataset is not None:
-            view = fov.DatasetView(dataset)
-            if view_ is not None:
-                view._stages = [
-                    fos.ViewStage._from_dict(s) for s in view_["view"]
-                ]
-
-        selected = d.get("selected", [])
+        stages = d.get("view", None)
+        if dataset is not None and stages:
+            view = fov.DatasetView._build(dataset, stages)
+        else:
+            view = None
 
         return cls(
+            active_handle=active_handle,
+            config=config,
             close=close,
             connected=connected,
             dataset=dataset,
             selected=selected,
+            selected_objects=selected_objects,
             view=view,
+            filters=filters,
+            refresh=refresh,
             **kwargs
         )
 
 
-class StateDescriptionWithDerivables(StateDescription):
-    """This class extends :class:`StateDescription` to include information that
-    does not define the state but needs to be fetched/computed and passed to
-    the frontend application, such as derived statistics (number of sample
-    occurrences with a given tag, etc.)
-
-    The python process should only ever see instances of
-    :class:`StateDescription` and the app should only ever see instances of
-    :class:`StateDescriptionWithDerivables` with the server acting as the
-    broker.
-    """
-
-    def __init__(self, filter_stages={}, with_stats=True, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.filter_stages = filter_stages
-        view = self.view if self.view is not None else self.dataset
-        if view is None or not with_stats:
-            return
-
-        self.field_schema = self._get_field_schema()
-        self.labels = self._get_label_fields(view)
-        self.tags = list(sorted(view.get_tags()))
-        self.view_stats = get_view_stats(view)
-
-        extended_view = view
-        for stage_dict in self.filter_stages.values():
-            extended_view = extended_view.add_stage(
-                fos.ViewStage._from_dict(stage_dict)
-            )
-
-        if extended_view == view:
-            self.extended_view_stats = {}
-        else:
-            self.extended_view_stats = get_view_stats(extended_view)
-        self.extended_view_count = (
-            len(extended_view) if extended_view != view else None
-        )
-
-    @classmethod
-    def from_dict(cls, d, **kwargs):
-        kwargs["filter_stages"] = d.get("filter_stages", {})
-        kwargs["with_stats"] = d.get("with_stats", True)
-        return super().from_dict(d, **kwargs)
-
-    def _get_view_stats(self, view):
-        if self.view is not None:
-            return get_view_stats(view)
-
-        return {}
-
-    def _get_field_schema(self):
-        if self.dataset is None:
-            return {}
-
-        return {
-            name: str(field)
-            for name, field in self.dataset.get_field_schema().items()
-        }
-
-    @staticmethod
-    def _get_label_fields(view):
-        label_fields = []
-        schema = view.get_field_schema()
-        if view.media_type == fom.VIDEO:
-            schema.update(view.get_frame_field_schema())
-
-        for k, v in schema.items():
-            d = {"field": k}
-            if isinstance(v, fof.EmbeddedDocumentField):
-                d["cls"] = v.document_type.__name__
-
-            label_fields.append(d)
-
-        return sorted(label_fields, key=lambda field: field["field"])
-
-
-def get_view_stats(dataset_or_view):
-    """Counts instances of each tag and each field within the samples of a
+class DatasetStatistics(object):
+    """Encapsulates the aggregation statistics required by the App's dataset
     view.
-
-    Args:
-        dataset_or_view: a :class:`fiftyone.core.view.DatasetView` or
-            :class:`fiftyone.core.dataset.Dataset` instance
-
-    Returns:
-        a dictionary with structure::
-
-            {
-                'tags': {
-                    '<TAG 1>': <COUNT>,
-                    '<TAG 2>': <COUNT>,
-                    ...
-                },
-                'custom_fields': {
-                    '<FIELD 1>': <COUNT>,
-                    '<FIELD 2>': <COUNT>,
-                    ...
-                }
-            }
     """
-    if isinstance(dataset_or_view, fod.Dataset):
-        view = dataset_or_view.view()
-    else:
-        view = dataset_or_view
 
-    custom_fields_schema = view.get_field_schema(include_private=True).copy()
-    for field_name in fod.Dataset.get_default_sample_fields(
-        include_private=True
-    ):
-        custom_fields_schema.pop(field_name, None)
+    def __init__(self, view):
+        schemas = [("", view.get_field_schema())]
+        aggregations = [foa.Count()]
+        if view.media_type == fom.VIDEO:
+            schemas.append(
+                (view._FRAMES_PREFIX, view.get_frame_field_schema())
+            )
+            aggregations.extend([foa.Count("frames")])
 
-    return {
-        "tags": {tag: len(view.match_tag(tag)) for tag in view.get_tags()},
-        "custom_fields": {
-            field_name: _get_field_count(view, field)
-            for field_name, field in custom_fields_schema.items()
-        },
-        "labels": _get_label_field_derivables(view),
-        "numeric_field_bounds": _get_numeric_field_bounds(view),
-    }
+        default_fields = fosa.get_default_sample_fields()
+        aggregations.append(foa.CountValues("tags"))
+        is_none = (~(fo.ViewField().exists())).if_else(True, None)
+        none_aggregations = []
+        for prefix, schema in schemas:
+            for field_name, field in schema.items():
+                if field_name in default_fields or (
+                    prefix == view._FRAMES_PREFIX
+                    and field_name == "frame_number"
+                ):
+                    continue
 
+                field_name = prefix + field_name
+                if _is_label(field):
+                    path = field_name
+                    if issubclass(field.document_type, fol._HasLabelList):
+                        path = "%s.%s" % (
+                            path,
+                            field.document_type._LABEL_LIST_FIELD,
+                        )
 
-def _get_label_field_derivables(view):
-    label_fields = _get_label_fields(view)
-    confidence_bounds = _get_label_confidence_bounds(view)
-    classes = {
-        field.name: _get_label_classes(view, field) for field in label_fields
-    }
-    return {
-        field.name: {
-            "confidence_bounds": confidence_bounds[field.name],
-            "classes": classes[field.name],
-        }
-        for field in label_fields
-    }
+                    aggregations.append(foa.Count(path))
+                    label_path = "%s.label" % path
+                    confidence_path = "%s.confidence" % path
+                    aggregations.extend(
+                        [
+                            foa.Distinct(label_path),
+                            foa.Bounds(confidence_path),
+                        ]
+                    )
+                    none_aggregations.append(
+                        foa.Count(label_path, expr=is_none)
+                    )
+                    none_aggregations.append(
+                        foa.Count(confidence_path, expr=is_none)
+                    )
+                else:
+                    aggregations.append(foa.Count(field_name))
+                    aggregations.append(foa.Count(field_name))
+                    none_aggregations.append(
+                        foa.Count(field_name, expr=is_none)
+                    )
 
+                    if _meets_type(field, (fof.IntField, fof.FloatField)):
+                        aggregations.append(foa.Bounds(field_name))
+                    elif _meets_type(field, fof.StringField):
+                        aggregations.append(foa.Distinct(field_name))
 
-def _get_label_classes(view, field):
-    pipeline = []
-    is_list = False
-    path = field.name
-    if (
-        view.media_type == fom.VIDEO
-        and field.name in view.get_frame_field_schema()
-    ):
-        path = "$frames.%s" % path
-        view = view._with_frames()
-    else:
-        path = "$%s" % path
+        self._aggregations = aggregations + none_aggregations
+        self._none_len = len(none_aggregations)
 
-    if issubclass(field.document_type, fol.Classifications):
-        path = "%s.classifications" % path
-        is_list = True
-    elif issubclass(field.document_type, fol.Detections):
-        path = "%s.detections" % path
-        is_list = True
-
-    if is_list:
-        pipeline.append(
-            {"$unwind": {"path": path, "preserveNullAndEmptyArrays": True}}
-        )
-
-    path = "%s.label" % path
-    pipeline.append({"$group": {"_id": None, "labels": {"$addToSet": path}}})
-
-    try:
-        return next(view.aggregate(pipeline))["labels"]
-    except StopIteration:
-        pass
+    @property
+    def aggregations(self):
+        return self._aggregations
 
 
-def _get_label_fields(view):
-    def _filter(field):
-        if not isinstance(field, fof.EmbeddedDocumentField):
-            return False
-
-        if issubclass(field.document_type, fol.ImageLabel):
-            return True
-
-        return False
-
-    schema = view.get_field_schema()
-
-    if view.media_type == fom.VIDEO:
-        schema.update(view.get_frame_field_schema())
-
-    return list(filter(_filter, schema.values()))
-
-
-def _get_bounds(fields, view, facets):
-    if len(facets) == 0:
-        return {}
-
-    pipeline = [{"$facet": facets}]
-
-    try:
-        result = next(view.aggregate(pipeline))
-    except StopIteration:
-        return {field.name: [None, None] for field in fields}
-    bounds = {}
-    for field in fields:
-        try:
-            bounds[field.name] = [
-                round(float(result[field.name][0]["min"]), 2),
-                round(float(result[field.name][0]["max"]), 2),
-            ]
-        except:
-            bounds[field.name] = [None, None]
-
-    return bounds
-
-
-def _get_numeric_field_bounds(view):
-    numeric_fields = list(
-        filter(
-            lambda f: type(f) in {fof.FloatField, fof.IntField},
-            view.get_field_schema().values(),
-        )
+def _meets_type(field, t):
+    return isinstance(field, t) or (
+        isinstance(field, fof.ListField) and isinstance(field.field, t)
     )
-    path = "$%s"
-    facets = {
-        field.name: [
-            {
-                "$group": {
-                    "_id": None,
-                    "min": {"$min": path % field.name},
-                    "max": {"$max": path % field.name},
-                }
-            }
-        ]
-        for field in numeric_fields
-    }
-
-    return _get_bounds(numeric_fields, view, facets)
 
 
-def _get_label_confidence_bounds(view):
-    fields = _get_label_fields(view)
-    facets = {}
-    bounds = {}
-    for field in fields:
-        is_list = False
-        path = field.name
-        if (
-            view.media_type == fom.VIDEO
-            and field.name in view.get_frame_field_schema()
-        ):
-            path = "$frames.%s" % path
-            local_view = view._with_frames()
-        else:
-            path = "$%s" % path
-            local_view = view
-        if issubclass(field.document_type, fol.Classifications):
-            path = "%s.classifications" % path
-            is_list = True
-        elif issubclass(field.document_type, fol.Detections):
-            path = "%s.detections" % path
-            is_list = True
-
-        facet_pipeline = []
-        if is_list:
-            facet_pipeline.append(
-                {"$unwind": {"path": path, "preserveNullAndEmptyArrays": True}}
-            )
-
-        path = "%s.confidence" % path
-        facet_pipeline.append(
-            {
-                "$group": {
-                    "_id": None,
-                    "min": {"$min": path},
-                    "max": {"$max": path},
-                }
-            },
-        )
-        facets[field.name] = facet_pipeline
-        bounds.update(_get_bounds(fields, local_view, facets))
-
-    return bounds
-
-
-def _get_field_count(view, field, prefix=""):
-    if prefix != "":
-        prefix += "."
-    if view.media_type == fom.VIDEO and field.name == "frames":
-        view = view._with_frames()
-        custom_fields_schema = view.get_frame_field_schema(
-            include_private=True
-        ).copy()
-        for frame_field_name in fod.Dataset.get_default_frame_fields(
-            include_private=True
-        ):
-            custom_fields_schema.pop(frame_field_name, None)
-        return {
-            frame_field_name: _get_field_count(
-                view, frame_field, prefix="frames"
-            )
-            for frame_field_name, frame_field in custom_fields_schema.items()
-        }
-    elif isinstance(field, fof.EmbeddedDocumentField):
-        extra_stage = []
-        array_field = "$%s" % prefix
-        if issubclass(field.document_type, fol.Classifications):
-            array_field += "%s.classifications" % field.name
-        elif issubclass(field.document_type, fol.Detections):
-            array_field += "%s.detections" % field.name
-        elif issubclass(field.document_type, fol.Polylines):
-            array_field += "%s.polylines" % field.name
-        elif issubclass(field.document_type, fol.Keypoint):
-            array_field += "%s.points" % field.name
-        elif issubclass(field.document_type, fol.Keypoints):
-            array_field += "%s.keypoints" % field.name
-            extra_stage = [
-                {"$unwind": array_field},
-            ]
-            array_field += "%s.points" % array_field
-        else:
-            array_field = None
-
-        if array_field:
-            # sum of lengths of arrays for each document
-            pipeline = [
-                {
-                    "$group": {
-                        "_id": None,
-                        "totalCount": {
-                            "$sum": {
-                                "$cond": {
-                                    "if": {"$isArray": array_field},
-                                    "then": {"$size": array_field},
-                                    "else": 0,
-                                }
-                            }
-                        },
-                    }
-                }
-            ]
-            pipeline = extra_stage + pipeline
-
-            try:
-                return next(view.aggregate(pipeline))["totalCount"]
-            except StopIteration:
-                return 0
-
-    path = prefix + field.name
-    pipeline = []
-    if prefix != "":
-        pipeline.append({"$project": {field.name: "$%s" % path}})
-    pipeline.extend(fos.Exists(field.name).to_mongo())
-    pipeline.append({"$count": "count"})
-    try:
-        return next(view.aggregate(pipeline))["count"]
-    except StopIteration:
-        pass
-
-    return 0
+def _is_label(field):
+    return isinstance(field, fof.EmbeddedDocumentField) and issubclass(
+        field.document_type, fol.Label
+    )
